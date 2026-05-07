@@ -1,0 +1,13 @@
+# opensearch.yml — конфиг для стенда (SSL отключён)
+cluster.name: ueba-cluster
+node.name: ueba-node1
+network.host: 0.0.0.0
+discovery.type: single-node
+plugins.security.disabled: true
+
+# Настройки для AD плагина
+plugins.anomaly_detection.enabled: true
+plugins.anomaly_detection.max_anomaly_detectors: 50
+
+# Индексные шаблоны — автосоздание
+action.auto_create_index: true

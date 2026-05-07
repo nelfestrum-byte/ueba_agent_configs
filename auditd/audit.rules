@@ -1,0 +1,58 @@
+## /etc/audit/rules.d/ueba.rules
+## Правила auditd для UEBA стенда
+
+# Очищаем все предыдущие правила
+-D
+
+# Увеличиваем буфер
+-b 8192
+
+# Отказываем в изменении правил (режим блокировки — для проды, не стенда)
+# -e 2
+
+# ── Запуск процессов (execve) ──────────────────────────────────────────────
+-a always,exit -F arch=b64 -S execve -k process_start
+-a always,exit -F arch=b32 -S execve -k process_start
+
+# ── Аутентификация ─────────────────────────────────────────────────────────
+-w /etc/pam.d/ -p wa -k pam_changes
+-w /etc/security/ -p wa -k security_changes
+
+# ── Изменения пользователей и групп ───────────────────────────────────────
+-w /etc/passwd   -p wa -k user_changes
+-w /etc/shadow   -p wa -k user_changes
+-w /etc/group    -p wa -k user_changes
+-w /etc/gshadow  -p wa -k user_changes
+-w /etc/sudoers  -p wa -k sudo_changes
+-w /etc/sudoers.d/ -p wa -k sudo_changes
+
+# ── SSH ключи ──────────────────────────────────────────────────────────────
+-a always,exit -F arch=b64 -S open,openat -F dir=/root/.ssh -k ssh_keys
+-a always,exit -F arch=b64 -S open,openat -F dir=/home -F name=authorized_keys -k ssh_keys
+
+# ── Cron ──────────────────────────────────────────────────────────────────
+-w /etc/cron.d/     -p wa -k cron_changes
+-w /etc/cron.daily/ -p wa -k cron_changes
+-w /etc/crontab     -p wa -k cron_changes
+-w /var/spool/cron/ -p wa -k cron_changes
+
+# ── Сетевые настройки ─────────────────────────────────────────────────────
+-a always,exit -F arch=b64 -S socket -F a0=2  -k socket_create
+-a always,exit -F arch=b64 -S socket -F a0=10 -k socket_create
+-a always,exit -F arch=b64 -S bind   -k socket_bind
+-a always,exit -F arch=b64 -S listen -k socket_listen
+-a always,exit -F arch=b64 -S connect -k socket_connect
+
+# ── Модули ядра ──────────────────────────────────────────────────────────
+-a always,exit -F arch=b64 -S init_module,finit_module -k module_load
+-a always,exit -F arch=b64 -S delete_module -k module_unload
+
+# ── Подозрительные пути ──────────────────────────────────────────────────
+-a always,exit -F arch=b64 -S execve -F dir=/tmp     -k suspicious_exec
+-a always,exit -F arch=b64 -S execve -F dir=/dev/shm -k suspicious_exec
+-a always,exit -F arch=b64 -S execve -F dir=/var/tmp -k suspicious_exec
+
+# ── Повышение привилегий ─────────────────────────────────────────────────
+-a always,exit -F arch=b64 -S setuid -k privilege_change
+-a always,exit -F arch=b64 -S setgid -k privilege_change
+-a always,exit -F arch=b64 -S setresuid -k privilege_change

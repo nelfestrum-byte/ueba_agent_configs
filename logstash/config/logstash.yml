@@ -1,0 +1,9 @@
+# logstash.yml
+http.host: "0.0.0.0"
+http.port: 9600
+log.level: info
+pipeline.workers: 2
+pipeline.batch.size: 125
+pipeline.batch.delay: 50
+config.reload.automatic: true
+config.reload.interval: 30s

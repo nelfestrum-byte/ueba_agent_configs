@@ -1,0 +1,158 @@
+version: "3.8"
+
+# =============================================================================
+# UEBA стенд — полный пайплайн
+#
+# Сервисы:
+#   opensearch      — SIEM, хранение событий, AD детекторы
+#   opensearch-dashboards — UI для OpenSearch
+#   logstash        — нормализация событий в Common Schema
+#   debian-agent    — Debian с osquery + fluent-bit + auditd + эмулятор
+#
+# Запуск:
+#   docker compose up -d
+#   docker compose logs -f logstash     # следить за нормализацией
+#   docker compose logs -f debian-agent # следить за агентом
+#
+# Эмулятор:
+#   docker compose exec debian-agent bash /scripts/emulator.sh --scenario normal
+#   docker compose exec debian-agent bash /scripts/emulator.sh --scenario anomaly
+#   docker compose exec debian-agent bash /scripts/emulator.sh --scenario attack
+# =============================================================================
+
+networks:
+  ueba-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  opensearch-data:
+  logstash-data:
+
+services:
+
+  # ── OpenSearch ──────────────────────────────────────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: ueba-opensearch
+    environment:
+      - cluster.name=ueba-cluster
+      - node.name=ueba-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      # Отключаем SSL для стенда
+      - plugins.security.disabled=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=UebaStand2024!
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - ./opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    networks:
+      ueba-net:
+        ipv4_address: 172.28.0.10
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── OpenSearch Dashboards ───────────────────────────────────────────────────
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    container_name: ueba-dashboards
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    networks:
+      ueba-net:
+        ipv4_address: 172.28.0.11
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status | grep -q 'available'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── Logstash ────────────────────────────────────────────────────────────────
+  logstash:
+    image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
+    container_name: ueba-logstash
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./logstash/patterns:/usr/share/logstash/patterns:ro
+    ports:
+      - "5044:5044"   # beats (sysmon)
+      - "5045:5045"   # auditd TCP
+      - "5046:5046"   # winevtlog TCP
+      - "5047:5047"   # sshd TCP
+      - "5048:5048"   # osquery TCP
+      - "5049:5049"   # suricata TCP
+    environment:
+      - "LS_JAVA_OPTS=-Xms512m -Xmx512m"
+    networks:
+      ueba-net:
+        ipv4_address: 172.28.0.12
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600 | grep -q 'green'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── Debian Agent ────────────────────────────────────────────────────────────
+  debian-agent:
+    build:
+      context: ./debian-agent
+      dockerfile: Dockerfile
+    container_name: ueba-debian-agent
+    hostname: debian-agent-01
+    depends_on:
+      logstash:
+        condition: service_healthy
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+      - AUDIT_WRITE
+      - AUDIT_CONTROL
+      - NET_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - ./osquery/osquery.conf:/etc/osquery/osquery.conf:ro
+      - ./fluent-bit/fluent-bit.conf:/etc/fluent-bit/fluent-bit.conf:ro
+      - ./fluent-bit/parsers.conf:/etc/fluent-bit/parsers.conf:ro
+      - ./fluent-bit/flatten.lua:/etc/fluent-bit/flatten.lua:ro
+      - ./auditd/audit.rules:/etc/audit/rules.d/ueba.rules:ro
+      - ./debian-agent/scripts:/scripts:ro
+    environment:
+      - LOGSTASH_HOST=logstash
+      - OPENSEARCH_HOST=opensearch
+      - HOSTNAME=debian-agent-01
+    networks:
+      ueba-net:
+        ipv4_address: 172.28.0.20
+    tty: true
+    stdin_open: true

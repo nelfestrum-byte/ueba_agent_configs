@@ -1,0 +1,213 @@
+---
+# UEBA agent deploy — Debian 12, без доступа в интернет.
+# Все .deb-пакеты предварительно скопированы в files/packages/
+# и устанавливаются с помощью apt с --no-download / dpkg.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini deploy.yml
+#
+# Переменные см. group_vars/all.yml
+
+- name: Deploy UEBA agents (osquery + fluent-bit + auditd)
+  hosts: ueba_agents
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - group_vars/all.yml
+
+  pre_tasks:
+    - name: Assert Debian 12
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == "Debian"
+          - ansible_facts.distribution_major_version == "12"
+        fail_msg: "Этот плейбук рассчитан на Debian 12 (bookworm), обнаружено {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+
+    - name: Ensure required directories exist on target
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ stage_dir }}"
+        - "{{ stage_dir }}/packages"
+        - /etc/osquery
+        - /etc/fluent-bit
+        - /etc/audit/rules.d
+        - /var/log/osquery
+        - /var/log/fluent-bit
+        - /var/lib/fluent-bit
+
+  tasks:
+    # ── 1. Стейджинг .deb пакетов на целевой машине ────────────────────────
+    - name: Copy .deb packages to staging dir
+      ansible.builtin.copy:
+        src: files/packages/
+        dest: "{{ stage_dir }}/packages/"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Enumerate .deb files in staging dir
+      ansible.builtin.find:
+        paths: "{{ stage_dir }}/packages"
+        patterns: "*.deb"
+      register: staged_debs
+
+    - name: Assert that .deb packages were staged
+      ansible.builtin.assert:
+        that:
+          - staged_debs.matched > 0
+        fail_msg: "Нет .deb-файлов в {{ stage_dir }}/packages — проверьте files/packages/ в bundle"
+
+    # ── 2. Установка пакетов из локальных файлов (offline) ─────────────────
+    # apt с локальными deb сам разрулит порядок зависимостей внутри переданного набора.
+    - name: Install all .deb packages via apt (offline)
+      ansible.builtin.apt:
+        deb: "{{ item.path }}"
+        state: present
+      loop: "{{ staged_debs.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: apt_install
+      # Если apt не найдёт зависимость локально и попытается в сеть — упадёт.
+      # Это диагностический сигнал, что bundle неполный.
+
+    - name: Hold osquery and fluent-bit at installed version
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - osquery
+        - fluent-bit
+        - auditd
+
+    # ── 3. auditd ──────────────────────────────────────────────────────────
+    - name: Deploy auditd rules
+      ansible.builtin.copy:
+        src: files/auditd/audit.rules
+        dest: /etc/audit/rules.d/ueba.rules
+        owner: root
+        group: root
+        mode: "0640"
+      notify: restart auditd
+
+    - name: Remove default auditd rule file (если есть, чтобы наши правила не перетирались)
+      ansible.builtin.file:
+        path: /etc/audit/rules.d/audit.rules
+        state: absent
+      notify: restart auditd
+
+    - name: Ensure auditd is enabled and running
+      ansible.builtin.systemd:
+        name: auditd
+        enabled: true
+        state: started
+
+    # ── 4. osquery ─────────────────────────────────────────────────────────
+    - name: Deploy osquery config
+      ansible.builtin.copy:
+        src: files/osquery/osquery.conf
+        dest: /etc/osquery/osquery.conf
+        owner: root
+        group: root
+        mode: "0640"
+      notify: restart osqueryd
+
+    - name: Validate osquery config syntax
+      ansible.builtin.command:
+        cmd: osqueryd --config_path=/etc/osquery/osquery.conf --config_check
+      changed_when: false
+
+    - name: Ensure osqueryd is enabled and running
+      ansible.builtin.systemd:
+        name: osqueryd
+        enabled: true
+        state: started
+
+    # ── 5. fluent-bit ──────────────────────────────────────────────────────
+    - name: Deploy fluent-bit configs
+      ansible.builtin.copy:
+        src: "files/fluent-bit/{{ item }}"
+        dest: "/etc/fluent-bit/{{ item }}"
+        owner: root
+        group: root
+        mode: "0640"
+      loop:
+        - fluent-bit.conf
+        - parsers.conf
+        - flatten.lua
+      notify: restart fluent-bit
+
+    - name: Render fluent-bit environment file (LOGSTASH_HOST, HOSTNAME)
+      ansible.builtin.copy:
+        dest: /etc/default/fluent-bit
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          LOGSTASH_HOST={{ logstash_host }}
+          HOSTNAME={{ ansible_facts.hostname }}
+      notify: restart fluent-bit
+
+    - name: Drop systemd override that loads /etc/default/fluent-bit
+      ansible.builtin.file:
+        path: /etc/systemd/system/fluent-bit.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Add fluent-bit EnvironmentFile via systemd drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/fluent-bit.service.d/override.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          EnvironmentFile=-/etc/default/fluent-bit
+      notify:
+        - reload systemd
+        - restart fluent-bit
+
+    - name: Validate fluent-bit config (--dry-run)
+      ansible.builtin.command:
+        cmd: /opt/fluent-bit/bin/fluent-bit --dry-run -c /etc/fluent-bit/fluent-bit.conf
+      environment:
+        LOGSTASH_HOST: "{{ logstash_host }}"
+        HOSTNAME: "{{ ansible_facts.hostname }}"
+      changed_when: false
+
+    - name: Ensure fluent-bit is enabled and running
+      ansible.builtin.systemd:
+        name: fluent-bit
+        enabled: true
+        state: started
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: restart auditd
+      # auditd не любит обычный systemctl restart; используем service / augenrules.
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - augenrules --load
+        - service auditd restart
+      changed_when: true
+
+    - name: restart osqueryd
+      ansible.builtin.systemd:
+        name: osqueryd
+        state: restarted
+
+    - name: restart fluent-bit
+      ansible.builtin.systemd:
+        name: fluent-bit
+        state: restarted

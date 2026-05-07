@@ -1,0 +1,4 @@
+# pipelines.yml — один пайплайн для всех источников стенда
+- pipeline.id: ueba-main
+  path.config: "/usr/share/logstash/pipeline/ueba-main.conf"
+  pipeline.workers: 2
