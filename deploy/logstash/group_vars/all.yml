@@ -1,0 +1,3 @@
+---
+logstash_image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
+deploy_dir: /opt/ueba-logstash

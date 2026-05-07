@@ -4,7 +4,7 @@
 
 ```
 ueba-stand/
-  docker-compose.yml          — основной compose файл
+  docker-compose.yml          — основной compose файл (полный стенд)
   opensearch/
     opensearch.yml            — конфиг OpenSearch
   logstash/
@@ -24,6 +24,15 @@ ueba-stand/
     entrypoint.sh
     scripts/
       emulator.sh             — эмулятор поведения
+  deploy/
+    logstash/
+      logstash-deploy.yml     — плейбук развертывания Logstash
+      inventory.ini           — инвентарь хостов
+      ansible.cfg             — настройки Ansible
+      group_vars/all.yml      — переменные
+      docker-compose.logstash.yml — compose-файл для удаленного хоста
+  dist/                       — артефакты сборки (gitignore'd)
+    logstash-image.tar.gz     — образ Docker (создается плейбуком)
 ```
 
 ## Требования
@@ -132,6 +141,88 @@ docker compose down
 # Полная очистка (удалить все данные)
 docker compose down -v
 ```
+
+## Развертывание Logstash на удаленном хосте (Ansible)
+
+Плейбук разворачивает Logstash через Docker Compose на хосте без доступа к интернету.
+Docker-образ скачивается на хосте управления и передается по SSH.
+
+### Требования
+
+- **Хост управления:** Docker, Ansible 2.12+, SSH-ключ для пользователя `installer`
+- **Удаленный хост:** Docker 24+, Docker Compose v2, пользователь `installer` в группе `docker`
+  (или `sudo` без пароля — см. комментарии в `ansible/inventory.ini`)
+
+### Первое развертывание
+
+```bash
+cd deploy/logstash
+
+# Шаг 1 — подготовить SSH-ключ (если ещё не сделано)
+ssh-copy-id installer@10.202.77.81
+
+# Шаг 2 — запустить плейбук
+# Плейбук сам скачает образ (~600 MB), сохранит в dist/ и передаст на хост
+ansible-playbook logstash-deploy.yml
+```
+
+Или из корня проекта:
+
+```bash
+ansible-playbook deploy/logstash/logstash-deploy.yml
+```
+
+### Обновление конфигов
+
+После правки файлов в `logstash/` достаточно перезапустить плейбук:
+
+```bash
+# Из deploy/logstash/
+ansible-playbook logstash-deploy.yml
+
+# Или из корня проекта
+ansible-playbook deploy/logstash/logstash-deploy.yml
+```
+
+Плейбук обнаружит изменения, скопирует обновленные файлы и перезапустит контейнер.
+Повторная передача образа **не** происходит — только файлы конфигов.
+
+### Принудительное пересоздание архива образа
+
+```bash
+# Из deploy/logstash/
+ansible-playbook logstash-deploy.yml -e force_image_rebuild=true
+
+# Или из корня проекта
+ansible-playbook deploy/logstash/logstash-deploy.yml -e force_image_rebuild=true
+```
+
+### Структура на удаленном хосте после развертывания
+
+```
+/opt/ueba-logstash/
+  docker-compose.yml
+  logstash/
+    config/logstash.yml
+    config/pipelines.yml
+    pipeline/ueba-main.conf
+    patterns/
+```
+
+### Проверка после развертывания
+
+```bash
+# Статус контейнера
+ssh installer@10.202.77.81 docker compose -f /opt/ueba-logstash/docker-compose.yml ps
+
+# Логи
+ssh installer@10.202.77.81 docker logs ueba-logstash -f
+
+# API Logstash
+curl http://10.202.77.81:9600
+```
+
+---
 
 ## Известные ограничения стенда
 
