@@ -15,11 +15,12 @@
 # Требования на хосте управления:
 #   - Docker (для pull + save)
 #   - Ansible 2.12+
-#   - SSH-ключ настроен для пользователя installer на 10.202.77.81
+#   - SSH-ключ настроен для непривилегированного пользователя на целевом хосте
 #
 # Требования на удаленном хосте:
 #   - Docker 24+ и Docker Compose v2
-#   - Пользователь installer в группе docker (или sudo без пароля)
+#   - SSH-пользователь должен быть в группе docker (sudo НЕ требуется)
+#   - Все файлы Logstash разворачиваются в ~/ueba-logstash под этим пользователем
 
 - name: Подготовка Docker-образа Logstash на хосте управления
   hosts: localhost
@@ -91,8 +92,6 @@
         path: "{{ item }}"
         state: directory
         mode: "0755"
-        owner: root
-        group: root
       loop:
         - "{{ deploy_dir }}"
         - "{{ deploy_dir }}/logstash/config"
@@ -104,8 +103,6 @@
         src: docker-compose.logstash.yml
         dest: "{{ deploy_dir }}/docker-compose.yml"
         mode: "0644"
-        owner: root
-        group: root
       register: compose_changed
 
     - name: Развернуть logstash/config/logstash.yml
@@ -113,8 +110,6 @@
         src: "{{ playbook_dir }}/../../logstash/config/logstash.yml"
         dest: "{{ deploy_dir }}/logstash/config/logstash.yml"
         mode: "0644"
-        owner: root
-        group: root
       register: cfg_logstash_yml
 
     - name: Развернуть logstash/config/pipelines.yml
@@ -122,8 +117,6 @@
         src: "{{ playbook_dir }}/../../logstash/config/pipelines.yml"
         dest: "{{ deploy_dir }}/logstash/config/pipelines.yml"
         mode: "0644"
-        owner: root
-        group: root
       register: cfg_pipelines_yml
 
     - name: Развернуть logstash/pipeline/ueba-main.conf
@@ -131,8 +124,6 @@
         src: "{{ playbook_dir }}/../../logstash/pipeline/ueba-main.conf"
         dest: "{{ deploy_dir }}/logstash/pipeline/ueba-main.conf"
         mode: "0644"
-        owner: root
-        group: root
       register: cfg_pipeline
 
     - name: Проверить наличие образа Logstash на удаленном хосте
