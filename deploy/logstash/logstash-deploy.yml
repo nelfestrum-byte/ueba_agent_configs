@@ -74,7 +74,7 @@
 
   vars:
     logstash_image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
-    deploy_dir: /opt/ueba-logstash
+    deploy_dir: ~/ueba-logstash
     image_archive_local: "{{ playbook_dir }}/../../dist/logstash-image.tar.gz"
     image_archive_remote: /tmp/logstash-image.tar.gz
 
