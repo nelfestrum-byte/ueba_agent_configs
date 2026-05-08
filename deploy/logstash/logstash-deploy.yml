@@ -69,7 +69,7 @@
 
 - name: Развертывание Logstash на удаленном хосте
   hosts: logstash
-  become: true
+  become: false
   gather_facts: false
 
   vars:
