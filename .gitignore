@@ -2,3 +2,8 @@
 
 # Артефакты сборки — Docker-образы и временные файлы развертывания
 dist/
+
+# Секреты развертывания Logstash
+deploy/logstash/.env
+deploy/logstash/host_vars/*.yml
+deploy/logstash/files/opensearch-ca.pem

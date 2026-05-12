@@ -2,8 +2,11 @@
 http.host: "0.0.0.0"
 http.port: 9600
 log.level: info
-pipeline.workers: 2
-pipeline.batch.size: 125
+pipeline.workers: 4
+pipeline.batch.size: 250
 pipeline.batch.delay: 50
+queue.type: persisted
+queue.max_bytes: 4gb
+queue.checkpoint.writes: 1024
 config.reload.automatic: true
 config.reload.interval: 30s

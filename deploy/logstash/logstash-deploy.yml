@@ -105,6 +105,27 @@
         mode: "0644"
       register: compose_changed
 
+    - name: Создать каталог для сертификатов
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}/certs"
+        state: directory
+        mode: "0755"
+
+    - name: Скопировать CA-сертификат OpenSearch
+      ansible.builtin.copy:
+        src: "{{ opensearch_ca_cert_src }}"
+        dest: "{{ deploy_dir }}/certs/opensearch-ca.pem"
+        mode: "0644"
+      register: cfg_ca_cert
+
+    - name: Развернуть .env с креденшалами OpenSearch
+      ansible.builtin.template:
+        src: templates/.env.j2
+        dest: "{{ deploy_dir }}/.env"
+        mode: "0600"
+      register: cfg_env
+      no_log: true
+
     - name: Развернуть logstash/config/logstash.yml
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../../logstash/config/logstash.yml"
@@ -168,7 +189,9 @@
           cfg_logstash_yml.changed or
           cfg_pipelines_yml.changed or
           cfg_pipeline.changed or
-          compose_changed.changed
+          compose_changed.changed or
+          cfg_env.changed or
+          cfg_ca_cert.changed
       changed_when: true
 
     - name: Показать статус контейнера

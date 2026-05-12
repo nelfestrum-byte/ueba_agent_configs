@@ -7,34 +7,46 @@ version: "3.8"
 #   ./logstash/pipeline/ueba-main.conf  — пайплайн нормализации
 #   ./logstash/config/logstash.yml      — настройки Logstash
 #   ./logstash/config/pipelines.yml     — список пайплайнов
+#   ./certs/opensearch-ca.pem           — CA-сертификат OpenSearch (read-only)
+#
+# Креденшалы и URL OpenSearch берутся из .env (см. templates/.env.j2).
 
 networks:
   ueba-net:
     driver: bridge
+
+volumes:
+  logstash-data:
 
 services:
   logstash:
     image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
     container_name: ueba-logstash
     restart: unless-stopped
+    env_file:
+      - .env
     volumes:
+      - logstash-data:/usr/share/logstash/data
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
       - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
       - ./logstash/config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
       - ./logstash/patterns:/usr/share/logstash/patterns:ro
+      - ./certs:/usr/share/logstash/config/certs:ro
+    # В продакшне биндим порты на внутренний интерфейс через LOGSTASH_BIND_ADDR
+    # (например, LOGSTASH_BIND_ADDR=10.0.0.5), а не на 0.0.0.0.
     ports:
-      - "5044:5044"   # beats (sysmon)
-      - "5045:5045"   # auditd TCP
-      - "5046:5046"   # winevtlog TCP
-      - "5047:5047"   # sshd TCP
-      - "5048:5048"   # osquery TCP
-      - "5049:5049"   # suricata TCP
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5044:5044"   # beats (sysmon)
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5045:5045"   # auditd TCP
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5046:5046"   # winevtlog TCP
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5047:5047"   # sshd TCP
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5048:5048"   # osquery TCP
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5049:5049"   # suricata TCP
     environment:
-      - "LS_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "LS_JAVA_OPTS=-Xms1g -Xmx1g"
     networks:
       - ueba-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9600 | grep -q 'green'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/stats >/dev/null"]
       interval: 20s
       timeout: 10s
       retries: 10
