@@ -1,9 +1,6 @@
 .claude/
 
-# Артефакты сборки — Docker-образы и временные файлы развертывания
-dist/
-
 # Секреты развертывания Logstash
-deploy/logstash/.env
-deploy/logstash/host_vars/*.yml
-deploy/logstash/files/opensearch-ca.pem
+logstash/deploy/.env
+logstash/deploy/host_vars/*.yml
+logstash/deploy/files/opensearch-ca.pem

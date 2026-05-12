@@ -1,7 +1,0 @@
----
-# Куда складывать .deb пакеты на целевом хосте перед установкой
-stage_dir: /opt/ueba-bundle
-
-# Адрес Logstash, в который fluent-bit отправляет события
-# (TCP-порты 5045 / 5047 / 5048 — см. fluent-bit.conf)
-logstash_host: logstash.example.local

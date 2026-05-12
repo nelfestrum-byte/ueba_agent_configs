@@ -1,0 +1,113 @@
+version: "3.8"
+
+# =============================================================================
+# UEBA dev-стенд — локальный прогон пайплайна Logstash
+#
+# Три сервиса: OpenSearch + Dashboards + Logstash.
+# Агентских контейнеров нет — события подаются вручную через scripts/.
+#
+# Логstash монтирует конфиги из ../logstash/configs/ — те же файлы, что в проде.
+# Подключение к OpenSearch через HTTP (без TLS, без auth) — OPENSEARCH_SSL не задан.
+#
+# Запуск:
+#   cd dev_stand && docker compose up -d
+#   docker compose logs -f logstash
+#
+# Тестовая отправка события:
+#   bash scripts/send-auditd.sh
+#   bash scripts/send-sshd.sh
+#   bash scripts/send-osquery.sh
+#
+# Просмотр результатов: http://localhost:5601
+# =============================================================================
+
+networks:
+  ueba-net:
+    driver: bridge
+
+volumes:
+  opensearch-data:
+  logstash-data:
+
+services:
+
+  # ── OpenSearch (single-node, security disabled) ────────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: ueba-opensearch
+    environment:
+      - cluster.name=ueba-cluster
+      - node.name=ueba-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - plugins.security.disabled=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+      - ./opensearch/opensearch.yml:/usr/share/opensearch/config/opensearch.yml:ro
+    ports:
+      - "9200:9200"
+    networks:
+      - ueba-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ── OpenSearch Dashboards ──────────────────────────────────────────────────
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.13.0
+    container_name: ueba-dashboards
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    networks:
+      - ueba-net
+
+  # ── Logstash (монтирует те же конфиги, что идут в прод) ───────────────────
+  logstash:
+    image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
+    container_name: ueba-logstash
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - "LS_JAVA_OPTS=-Xms512m -Xmx512m"
+      - OPENSEARCH_URL=http://opensearch:9200
+      # OPENSEARCH_SSL не задан → дефолт false в ueba-main.conf
+      # OPENSEARCH_USER/PASSWORD не заданы → auth отключён
+    volumes:
+      - logstash-data:/usr/share/logstash/data
+      - ../logstash/configs/pipeline:/usr/share/logstash/pipeline:ro
+      - ../logstash/configs/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ../logstash/configs/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ../logstash/configs/patterns:/usr/share/logstash/patterns:ro
+    ports:
+      - "5044:5044"   # beats (sysmon)
+      - "5045:5045"   # auditd TCP
+      - "5046:5046"   # winevtlog TCP
+      - "5047:5047"   # sshd TCP
+      - "5048:5048"   # osquery TCP
+      - "5049:5049"   # suricata TCP
+    networks:
+      - ueba-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/stats >/dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s

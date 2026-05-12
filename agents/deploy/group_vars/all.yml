@@ -1,0 +1,23 @@
+---
+# =============================================================================
+# Переменные развертывания UEBA-агентов
+# =============================================================================
+
+# Куда fluent-bit отправляет события (IP или hostname Logstash-хоста)
+logstash_host: logstash.example.local
+
+# URL репозиториев (по умолчанию — официальные публичные).
+# Если у целевых хостов нет прямого интернета, замените на зеркало:
+#   apt_mirror_url: http://mirror.example.local/apt
+# Тогда:
+#   osquery_apt_repo_url: "{{ apt_mirror_url }}/osquery"
+#   fluent_bit_apt_repo_url: "{{ apt_mirror_url }}/fluent-bit"
+osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
+osquery_apt_repo_url: "https://pkg.osquery.io/deb"
+
+fluent_bit_apt_key_url: "https://packages.fluentbit.io/fluentbit.key"
+fluent_bit_apt_repo_url: "https://packages.fluentbit.io/debian/bookworm"
+
+# Версии пакетов (опционально; если не заданы — устанавливается latest из репо)
+# osquery_version: "5.22.1-1.linux"
+# fluent_bit_version: "5.0.4"

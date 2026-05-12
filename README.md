@@ -1,232 +1,154 @@
-# UEBA стенд — руководство по запуску
+# UEBA — система сбора и анализа поведения
 
-## Структура
+Два прод-сценария и локальный dev-стенд:
 
-```
-ueba-stand/
-  docker-compose.yml          — основной compose файл (полный стенд)
-  opensearch/
-    opensearch.yml            — конфиг OpenSearch
-  logstash/
-    pipeline/ueba-main.conf   — пайплайн нормализации
-    config/logstash.yml
-    config/pipelines.yml
-  fluent-bit/
-    fluent-bit.conf           — сбор метрик и логов
-    parsers.conf
-    flatten.lua               — нормализация osquery
-  osquery/
-    osquery.conf              — запросы метрик и diff
-  auditd/
-    audit.rules               — правила аудита Linux
-  debian-agent/
-    Dockerfile
-    entrypoint.sh
-    scripts/
-      emulator.sh             — эмулятор поведения
-  deploy/
-    logstash/
-      logstash-deploy.yml     — плейбук развертывания Logstash
-      inventory.ini           — инвентарь хостов
-      ansible.cfg             — настройки Ansible
-      group_vars/all.yml      — переменные
-      docker-compose.logstash.yml — compose-файл для удаленного хоста
-  dist/                       — артефакты сборки (gitignore'd)
-    logstash-image.tar.gz     — образ Docker (создается плейбуком)
-```
+1. **Logstash** — разворачивается на выделенном хосте через Docker, пишет в внешний OpenSearch (HTTPS + Security plugin).
+2. **Агенты** — osquery, fluent-bit, auditd на Debian 12 VM; события идут по TCP в Logstash.
+3. **Dev-стенд** — локальный прогон пайплайна: OpenSearch + Dashboards + Logstash, без агентских контейнеров.
 
-## Требования
+---
 
-- Docker 24+
-- Docker Compose v2
-- RAM: 4GB минимум (OpenSearch требует 2GB)
-- Disk: 5GB свободного места
+## 1. Развертывание Logstash на прод-хосте
 
-## Запуск
+### Требования на целевом хосте
 
-```bash
-# 1. Клонировать / скопировать директорию ueba-stand
-cd ueba-stand
+- Debian/Ubuntu, Docker 24+, Docker Compose v2
+- Пользователь `installer` в группе `docker` (sudo не требуется)
+- Доступ к Docker Hub или внутреннему registry (для `docker pull`)
+- Сеть: TCP 5044–5049 доступны агентским машинам
 
-# 2. Поднять стенд (первый запуск ~5 мин — скачивание образов)
-docker compose up -d
+### Подготовка
 
-# 3. Следить за запуском
-docker compose logs -f
+1. **CA-сертификат OpenSearch** — положить в `logstash/deploy/files/opensearch-ca.pem` (gitignore'd).
 
-# 4. Дождаться готовности (все сервисы healthy)
-docker compose ps
-```
+2. **Пароль OpenSearch** — сохранить через ansible-vault:
+   ```bash
+   ansible-vault create logstash/deploy/host_vars/<hostname>.yml
+   # Содержимое: opensearch_password: "<пароль>"
+   ```
 
-## Проверка готовности
+3. **Инвентарь** — указать целевой хост в `logstash/deploy/inventory.ini`:
+   ```ini
+   [logstash]
+   logstash-prod  ansible_host=10.0.0.5
+   ```
 
-```bash
-# OpenSearch
-curl http://localhost:9200/_cluster/health?pretty
-
-# Logstash
-curl http://localhost:9600
-
-# OpenSearch Dashboards
-open http://localhost:5601
-```
-
-## Эмулятор
-
-```bash
-# Нормальная активность (для baseline AD детекторов)
-docker compose exec debian-agent bash /scripts/emulator.sh --scenario normal
-
-# Аномальные события (поднимает score)
-docker compose exec debian-agent bash /scripts/emulator.sh --scenario anomaly
-
-# Цепочка атаки (критический score)
-docker compose exec debian-agent bash /scripts/emulator.sh --scenario attack
-
-# Постепенное наращивание (тест decay)
-docker compose exec debian-agent bash /scripts/emulator.sh --scenario buildup
-
-# Все сценарии по очереди
-docker compose exec debian-agent bash /scripts/emulator.sh --scenario all
-
-# Повторить аномалию 5 раз
-docker compose exec debian-agent bash /scripts/emulator.sh --scenario anomaly --repeat 5
-```
-
-## Проверка данных в OpenSearch
-
-Открыть Dev Tools в Dashboards (http://localhost:5601):
-
-```json
-// Метрики хоста от osquery
-GET host-metrics-*/_search
-{ "size": 5, "sort": [{"@timestamp": "desc"}] }
-
-// События аутентификации
-GET auth-events-*/_search
-{ "size": 5, "sort": [{"@timestamp": "desc"}] }
-
-// Запуски процессов
-GET process-events-*/_search
-{ "size": 5, "sort": [{"@timestamp": "desc"}] }
-
-// Конфигурационные изменения
-GET config-events-*/_search
-{ "size": 5, "sort": [{"@timestamp": "desc"}] }
-
-// Все индексы
-GET _cat/indices?v&s=index
-```
-
-## Порядок настройки AD детекторов
-
-После того как накопится 30+ минут данных normal сценария:
-
-1. Открыть OpenSearch Dashboards → Anomaly Detection
-2. Создать детектор:
-   - Index: `host-metrics-*`
-   - Timestamp: `@timestamp`
-   - Category field: `entity_id`
-   - Feature: `value`, aggregation: `max`
-   - Detector interval: 5 минут
-3. Start detector → дать обучиться ~1 час
-4. Запустить `anomaly` сценарий → наблюдать `anomaly_grade`
-
-## Остановка стенда
-
-```bash
-# Остановить без удаления данных
-docker compose down
-
-# Полная очистка (удалить все данные)
-docker compose down -v
-```
-
-## Развертывание Logstash на удаленном хосте (Ansible)
-
-Плейбук разворачивает Logstash через Docker Compose на хосте без доступа к интернету.
-Docker-образ скачивается на хосте управления и передается по SSH.
-
-### Требования
-
-- **Хост управления:** Docker, Ansible 2.12+, SSH-ключ для пользователя `installer`
-- **Удаленный хост:** Docker 24+, Docker Compose v2, пользователь `installer` в группе `docker`
-  (или `sudo` без пароля — см. комментарии в `ansible/inventory.ini`)
+4. **Переменные** — проверить `logstash/deploy/group_vars/all.yml`:
+   - `opensearch_url` — HTTPS-эндпоинт OpenSearch
+   - `opensearch_user` — пользователь для записи индексов
+   - `logstash_bind_addr` — интерфейс для биндинга портов (по умолчанию `0.0.0.0`)
 
 ### Первое развертывание
 
 ```bash
-cd deploy/logstash
-
-# Шаг 1 — подготовить SSH-ключ (если ещё не сделано)
-ssh-copy-id installer@10.202.77.81
-
-# Шаг 2 — запустить плейбук
-# Плейбук сам скачает образ (~600 MB), сохранит в dist/ и передаст на хост
-ansible-playbook logstash-deploy.yml
+cd logstash/deploy
+ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
-Или из корня проекта:
-
-```bash
-ansible-playbook deploy/logstash/logstash-deploy.yml
-```
+Плейбук создаст `~/ueba-logstash/` на целевом хосте, скопирует конфиги, CA-сертификат, `.env` и запустит контейнер через `docker compose up -d`.
 
 ### Обновление конфигов
 
-После правки файлов в `logstash/` достаточно перезапустить плейбук:
+Повторный запуск плейбука достаточен: он обнаружит изменённые файлы и перезапустит контейнер автоматически.
 
 ```bash
-# Из deploy/logstash/
-ansible-playbook logstash-deploy.yml
-
-# Или из корня проекта
-ansible-playbook deploy/logstash/logstash-deploy.yml
+# Изменить logstash/configs/pipeline/ueba-main.conf, затем:
+cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
-Плейбук обнаружит изменения, скопирует обновленные файлы и перезапустит контейнер.
-Повторная передача образа **не** происходит — только файлы конфигов.
-
-### Принудительное пересоздание архива образа
+### Проверка после деплоя
 
 ```bash
-# Из deploy/logstash/
-ansible-playbook logstash-deploy.yml -e force_image_rebuild=true
-
-# Или из корня проекта
-ansible-playbook deploy/logstash/logstash-deploy.yml -e force_image_rebuild=true
-```
-
-### Структура на удаленном хосте после развертывания
-
-```
-/opt/ueba-logstash/
-  docker-compose.yml
-  logstash/
-    config/logstash.yml
-    config/pipelines.yml
-    pipeline/ueba-main.conf
-    patterns/
-```
-
-### Проверка после развертывания
-
-```bash
-# Статус контейнера
-ssh installer@10.202.77.81 docker compose -f /opt/ueba-logstash/docker-compose.yml ps
-
-# Логи
-ssh installer@10.202.77.81 docker logs ueba-logstash -f
-
-# API Logstash
-curl http://10.202.77.81:9600
+# На целевом хосте:
+docker ps --filter name=ueba-logstash
+curl -sf http://localhost:9600/_node/stats | python3 -m json.tool | grep -A2 '"events"'
 ```
 
 ---
 
-## Известные ограничения стенда
+## 2. Развертывание агентов на Debian VM
 
-- auditd в Docker контейнере работает с ограничениями — часть syscall событий
-  может не перехватываться без `--privileged`. Для полного аудита используй VM.
-- osquery kernel_modules недоступен внутри контейнера без privileged режима.
-- sshd в контейнере пишет в /var/log/auth.log — fluent-bit читает этот файл напрямую.
+### Требования
+
+- Debian 12 (bookworm)
+- Пользователь `deploy` с правами sudo
+- Интернет-доступ к `pkg.osquery.io` и `packages.fluentbit.io`
+  (или внутреннее зеркало — см. `apt_mirror_url` ниже)
+
+### Настройка
+
+1. **Инвентарь** — указать VM в `agents/deploy/inventory.ini`:
+   ```ini
+   [ueba_agents]
+   agent01  ansible_host=10.0.1.11
+   agent02  ansible_host=10.0.1.12
+   ```
+
+2. **Переменные** в `agents/deploy/group_vars/all.yml`:
+   - `logstash_host` — hostname или IP Logstash-хоста
+   - `apt_mirror_url` — (опционально) внутреннее зеркало apt:
+     ```yaml
+     apt_mirror_url: http://mirror.example.local/apt
+     osquery_apt_repo_url: "{{ apt_mirror_url }}/osquery"
+     fluent_bit_apt_repo_url: "{{ apt_mirror_url }}/fluent-bit"
+     ```
+
+### Установка
+
+```bash
+cd agents/deploy
+ansible-playbook agents-deploy.yml --ask-become-pass
+```
+
+Плейбук: добавляет apt-репозитории → устанавливает osquery, fluent-bit, auditd → раскладывает конфиги из `agents/configs/` → настраивает systemd → запускает сервисы.
+
+### Проверка на агентской машине
+
+```bash
+systemctl status osqueryd
+systemctl status fluent-bit
+systemctl status auditd
+
+# Убедиться, что события доходят до Logstash:
+journalctl -u fluent-bit -n 20 --no-pager
+```
+
+### Проверка в OpenSearch
+
+```
+GET /process-events-*/_count
+GET /auth-events-*/_count
+GET /host-metrics-*/_count
+```
+
+---
+
+## 3. Локальный dev-стенд
+
+Только для разработки и отладки пайплайна Logstash — без агентских контейнеров.
+
+```bash
+cd dev_stand
+docker compose up -d
+docker compose logs -f logstash
+```
+
+Dashboards: http://localhost:5601
+
+Тестовая отправка событий:
+```bash
+bash dev_stand/scripts/send-auditd.sh    # → process-events-*
+bash dev_stand/scripts/send-sshd.sh      # → auth-events-*
+bash dev_stand/scripts/send-osquery.sh   # → config-events-*
+```
+
+Подробнее: [dev_stand/README.md](dev_stand/README.md)
+
+---
+
+## Известные ограничения
+
+- **TLS-сертификаты**: CA-сертификат не отслеживается git'ом — нужно вручную разложить перед первым деплоем Logstash.
+- **Права пользователя installer**: должен быть в группе `docker`; если нет — включить `ansible_become=true` в inventory.
+- **Версии пакетов**: по умолчанию устанавливается latest из репозитория; чтобы зафиксировать — раскомментировать `osquery_version` / `fluent_bit_version` в `agents/deploy/group_vars/all.yml`.
+- **auditd в контейнерах**: полный аудит syscall требует привилегированного режима; dev-стенд не эмулирует агентские машины.

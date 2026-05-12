@@ -1,0 +1,33 @@
+---
+# =============================================================================
+# Переменные развертывания Logstash
+# =============================================================================
+#
+# Пароль OpenSearch задаётся через ansible-vault:
+#   ansible-vault create logstash/deploy/host_vars/<хост>.yml
+#   Содержимое: opensearch_password: "<пароль>"
+#
+# Запуск с vault:
+#   cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
+#
+# CA-сертификат OpenSearch: положить в logstash/deploy/files/opensearch-ca.pem
+# (gitignore'd — Ansible скопирует его на целевой хост).
+# =============================================================================
+
+logstash_image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.9.0
+deploy_dir: ~/ueba-logstash
+
+# OpenSearch endpoint (прод — HTTPS + Security plugin)
+opensearch_url: "https://opensearch.ueba.internal:9200"
+opensearch_user: "logstash_writer"
+# opensearch_password: см. ansible-vault (host_vars/<host>.yml)
+
+# SSL: true включает TLS и верификацию CA-сертификата в ueba-main.conf
+opensearch_ssl: "true"
+
+# CA-сертификат для верификации TLS
+opensearch_ca_cert_src: "files/opensearch-ca.pem"
+
+# Адрес, на который Logstash биндит порты приёма событий.
+# В проде — указать внутренний интерфейс, чтобы порты не были публичными.
+# logstash_bind_addr: 10.0.0.5

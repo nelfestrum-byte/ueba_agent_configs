@@ -1,0 +1,138 @@
+---
+# Развертывание Logstash на удаленном хосте через Docker.
+#
+# Что делает плейбук:
+#   1. Создаёт ~/ueba-logstash/ на целевом хосте (конфиги, certs, .env)
+#   2. Копирует docker-compose.yml, конфиги из logstash/configs/, CA-сертификат
+#   3. Рендерит .env из шаблона (credentials через ansible-vault)
+#   4. Вытягивает Docker-образ на удалённом хосте (docker pull)
+#   5. Запускает контейнер; при повторных запусках перезапускает только если что-то изменилось
+#
+# Использование:
+#   cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
+#
+# Требования на удалённом хосте:
+#   - Docker 24+ и Docker Compose v2
+#   - Доступ к Docker Hub или внутреннему registry (для docker pull)
+#   - SSH-пользователь в группе docker (sudo не требуется)
+#
+# Переменные: см. group_vars/all.yml и host_vars/<host>.yml (vault)
+
+- name: Развертывание Logstash на удаленном хосте
+  hosts: logstash
+  become: false
+  gather_facts: false
+
+  vars_files:
+    - group_vars/all.yml
+
+  tasks:
+    - name: Проверить текущий статус контейнера
+      ansible.builtin.command:
+        cmd: docker ps -q --filter name=ueba-logstash --filter status=running
+      register: pre_run_status
+      changed_when: false
+      failed_when: false
+
+    - name: Создать структуру каталогов
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ deploy_dir }}"
+        - "{{ deploy_dir }}/logstash/config"
+        - "{{ deploy_dir }}/logstash/pipeline"
+        - "{{ deploy_dir }}/logstash/patterns"
+        - "{{ deploy_dir }}/certs"
+
+    - name: Развернуть docker-compose.yml
+      ansible.builtin.copy:
+        src: docker-compose.yml
+        dest: "{{ deploy_dir }}/docker-compose.yml"
+        mode: "0644"
+      register: compose_changed
+
+    - name: Скопировать CA-сертификат OpenSearch
+      ansible.builtin.copy:
+        src: "{{ opensearch_ca_cert_src }}"
+        dest: "{{ deploy_dir }}/certs/opensearch-ca.pem"
+        mode: "0644"
+      register: cfg_ca_cert
+
+    - name: Развернуть .env с параметрами подключения
+      ansible.builtin.template:
+        src: templates/.env.j2
+        dest: "{{ deploy_dir }}/.env"
+        mode: "0600"
+      register: cfg_env
+      no_log: true
+
+    - name: Развернуть logstash.yml
+      ansible.builtin.copy:
+        src: ../configs/logstash.yml
+        dest: "{{ deploy_dir }}/logstash/config/logstash.yml"
+        mode: "0644"
+      register: cfg_logstash_yml
+
+    - name: Развернуть pipelines.yml
+      ansible.builtin.copy:
+        src: ../configs/pipelines.yml
+        dest: "{{ deploy_dir }}/logstash/config/pipelines.yml"
+        mode: "0644"
+      register: cfg_pipelines_yml
+
+    - name: Развернуть ueba-main.conf
+      ansible.builtin.copy:
+        src: ../configs/pipeline/ueba-main.conf
+        dest: "{{ deploy_dir }}/logstash/pipeline/ueba-main.conf"
+        mode: "0644"
+      register: cfg_pipeline
+
+    - name: Синхронизировать grok-паттерны
+      ansible.builtin.copy:
+        src: ../configs/patterns/
+        dest: "{{ deploy_dir }}/logstash/patterns/"
+        mode: "0644"
+      register: cfg_patterns
+
+    - name: Вытянуть Docker-образ Logstash
+      ansible.builtin.command:
+        cmd: docker pull "{{ logstash_image }}"
+      register: docker_pull
+      changed_when: "'Status: Downloaded newer image' in docker_pull.stdout"
+
+    - name: Запустить Logstash (первое развертывание или после остановки)
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ deploy_dir }}"
+      when: pre_run_status.stdout == ""
+      changed_when: true
+
+    - name: Перезапустить Logstash при изменении конфигов
+      ansible.builtin.command:
+        cmd: docker compose restart logstash
+        chdir: "{{ deploy_dir }}"
+      when:
+        - pre_run_status.stdout != ""
+        - >-
+          cfg_logstash_yml.changed or
+          cfg_pipelines_yml.changed or
+          cfg_pipeline.changed or
+          cfg_patterns.changed or
+          compose_changed.changed or
+          cfg_env.changed or
+          cfg_ca_cert.changed or
+          docker_pull.changed
+      changed_when: true
+
+    - name: Показать статус контейнера
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ deploy_dir }}"
+      changed_when: false
+      register: compose_status
+
+    - name: Вывести статус
+      ansible.builtin.debug:
+        msg: "{{ compose_status.stdout_lines }}"
