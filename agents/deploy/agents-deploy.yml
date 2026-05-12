@@ -1,5 +1,5 @@
 ---
-# Развертывание UEBA-агентов (osquery + fluent-bit + auditd) на Debian 12.
+# Развертывание UEBA-агентов (osquery + fluent-bit + auditd) на Debian/Ubuntu.
 #
 # Что делает плейбук:
 #   1. Подключает официальные apt-репозитории osquery и fluent-bit
@@ -24,13 +24,12 @@
     - group_vars/all.yml
 
   pre_tasks:
-    - name: Assert Debian 12
+    - name: Assert Debian-family OS (apt required)
       ansible.builtin.assert:
         that:
-          - ansible_facts.distribution == "Debian"
-          - ansible_facts.distribution_major_version == "12"
+          - ansible_facts.os_family == "Debian"
         fail_msg: >
-          Этот плейбук рассчитан на Debian 12 (bookworm).
+          Плейбук использует apt; требуется Debian/Ubuntu.
           Обнаружено: {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
 
     - name: Создать рабочие директории
@@ -76,7 +75,7 @@
       ansible.builtin.apt_repository:
         repo: >
           deb [signed-by=/usr/share/keyrings/fluent-bit-keyring.gpg]
-          {{ fluent_bit_apt_repo_url }} bookworm main
+          {{ fluent_bit_apt_repo_url }}/{{ ansible_distribution | lower }}/{{ ansible_distribution_release }} main
         filename: fluent-bit
         state: present
 
@@ -85,21 +84,12 @@
     - name: Установить osquery, fluent-bit, auditd
       ansible.builtin.apt:
         name:
-          - "osquery{{ ('=' + osquery_version) if osquery_version is defined else '' }}"
-          - "fluent-bit{{ ('=' + fluent_bit_version) if fluent_bit_version is defined else '' }}"
+          - osquery
+          - fluent-bit
           - auditd
           - audispd-plugins
-        state: present
+        state: latest
         update_cache: true
-
-    - name: Зафиксировать версии пакетов (hold)
-      ansible.builtin.dpkg_selections:
-        name: "{{ item }}"
-        selection: hold
-      loop:
-        - osquery
-        - fluent-bit
-        - auditd
 
     # ── 3. auditd ──────────────────────────────────────────────────────────────
 

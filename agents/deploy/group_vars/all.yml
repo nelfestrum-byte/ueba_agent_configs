@@ -16,8 +16,5 @@ osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
 osquery_apt_repo_url: "https://pkg.osquery.io/deb"
 
 fluent_bit_apt_key_url: "https://packages.fluentbit.io/fluentbit.key"
-fluent_bit_apt_repo_url: "https://packages.fluentbit.io/debian/bookworm"
-
-# Версии пакетов (опционально; если не заданы — устанавливается latest из репо)
-# osquery_version: "5.22.1-1.linux"
-# fluent_bit_version: "5.0.4"
+# Базовый URL без кодового имени — дистрибутив подставляется автоматически в плейбуке
+fluent_bit_apt_repo_url: "https://packages.fluentbit.io"
