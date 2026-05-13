@@ -16,7 +16,7 @@
 |---|---|---|---|---|---|---|---|
 | `process_start` | Windows | fluent-bit `winevtlog` | Sysmon EID 1 | winevtlog JSON → beats:5044 → Logstash: `Image→process.executable`, `CommandLine`, `User`, `Hashes` → enrich: `entity_id=host.name`, `from_suspicious_path` | `process-events-*` | **first_seen**, suspicious path | Новый exe path, запуск из `/tmp`, `AppData` |
 | `process_start` | Linux | fluent-bit `systemd` | auditd `execve syscall=59` | journald MESSAGE → tcp:5045 → Logstash grok SYSCALL: `exe`, `comm`, `auid`, `uid`, `ppid` → normalize: `exe→process.executable`, `comm→process.name` → enrich: `entity_id=host.name` | `process-events-*` | **first_seen**, suspicious path | Тот же индекс — правило единое для Win+Linux |
-| `process_start` | Windows (резерв) | osquery `diff` | `processes` table | osqueryd results.log → fluent-bit tail → Lua `flatten_diff`: `action=added`, `path`, `name`, `cmdline` → tcp:5048 → Logstash → normalize: `path→process.executable` | `process-events-*` | **first_seen** | Резерв когда нет Sysmon |
+| `process_start` | Linux | osquery `diff` | `processes` table | osqueryd results.log → fluent-bit tail → Lua `flatten_diff`: `action=added`, `name`, `path`, `cmdline`, `uid`, `parent`, `username`, `parent_name` → tcp:5048 → Logstash → normalize: `name→process.name`, `path→process.executable`, `cmdline→process.command_line`, `username→user.name`, `uid→user.id`, `parent→process.parent.pid`, `parent_name→process.parent.name` | `process-events-*` | **first_seen** | Тот же индекс: кто запустил, с каким cmdline, родительский процесс |
 
 ---
 
@@ -26,6 +26,7 @@
 |---|---|---|---|---|---|---|---|
 | `login` / `login_failed` | Windows | fluent-bit `winevtlog` | Security EID 4624 / 4625 | Security channel JSON → tcp:5046 → Logstash: `event_id→action`, `TargetUserName→user.name`, `IpAddress→source.ip` → enrich: `hour_of_day`, `day_of_week`, `is_offhours` | `auth-events-*` | **AD** (logins_per_hour через Transform), **offhours**, **brute force** | AD: `logins_per_hour`; правило: `is_offhours=true`; правило: `failed > N/мин` |
 | `login` / `login_failed` | Linux | fluent-bit `systemd` | sshd journald / auditd `USER_AUTH` | journald sshd MESSAGE → tcp:5047 → Logstash grok: `user`, `src_ip`, `auth_method`, `Accepted/Failed` → enrich: `hour_of_day`, `is_offhours` | `auth-events-*` | **AD**, **offhours**, **brute force** | Тот же индекс — правило единое Win+Linux |
+| `session_change` | Linux | osquery `diff` | `logged_in_users` table | osqueryd results.log → fluent-bit tail → Lua `flatten_diff`: `action=added/removed`, `user`, `type`, `host`, `time`, `pid` → tcp:5048 → Logstash → normalize: `user→user.name`, `host→session_host`, `pid→process.pid` | `auth-events-*` | **AD**, **first_seen** | Активные сессии: TTY/SSH, появление/закрытие; корреляция с login/logout |
 | `privilege_use` | Windows | fluent-bit `winevtlog` | Security EID 4648 (runas) | Security channel → tcp:5046 → Logstash: `action=privilege_use`, `user.name`, `target_user` | `auth-events-*` | **Детерм. правило** | Любой runas → webhook немедленно |
 
 ---
@@ -75,23 +76,33 @@
 
 | Поле | Тип | Источник Windows | Источник Linux |
 |------|-----|-----------------|----------------|
-| `process.executable` | keyword | Sysmon `Image` | auditd `exe` |
-| `process.name` | keyword | basename(Image) | auditd `comm` |
-| `process.command_line` | text | Sysmon `CommandLine` | auditd `a0..aN` (join) |
-| `process.pid` | integer | Sysmon `ProcessId` | auditd `pid` |
-| `process.parent.executable` | keyword | Sysmon `ParentImage` | auditd `ppid` (по pid) |
-| `user.name` | keyword | EventLog `TargetUserName` | sshd grok `user` |
-| `user.id` | keyword | EventLog `TargetUserSid` | auditd `uid` |
+| `process.executable` | keyword | Sysmon `Image` | auditd `exe`; osquery `path` |
+| `process.name` | keyword | basename(Image) | auditd `comm`; osquery `name` |
+| `process.command_line` | text | Sysmon `CommandLine` | osquery `cmdline` |
+| `process.pid` | integer | Sysmon `ProcessId` | auditd `pid`; osquery `pid` |
+| `process.parent.pid` | integer | Sysmon `ParentProcessId` | auditd `ppid`; osquery `parent` |
+| `process.parent.name` | keyword | Sysmon `ParentImage` (basename) | osquery `parent_name` (subquery) |
+| `process.from_suspicious_path` | boolean | вычисляется из `process.executable` | вычисляется из `process.executable` |
+| `user.name` | keyword | EventLog `TargetUserName` | sshd grok `user`; osquery `username` |
+| `user.id` | integer | EventLog `TargetUserSid` | auditd `uid`; osquery `uid` |
 | `user.audit_id` | integer | — | auditd `auid` (сохраняется при sudo/su) |
 | `source.ip` | ip | EventLog `IpAddress` | sshd grok `src_ip` |
 | `destination.ip` | ip | Sysmon EID 3 `DestinationIp` | Suricata `dest_ip` |
 | `destination.port` | integer | Sysmon EID 3 `DestinationPort` | Suricata `dest_port` |
 | `file.hash.sha256` | keyword | Sysmon `Hashes` (SHA256=…) | — |
-| `event.is_offhours` | boolean | вычисляется из `@timestamp` | вычисляется из `@timestamp` |
-| `event.hour_of_day` | integer | вычисляется из `@timestamp` | вычисляется из `@timestamp` |
-| `ueba.entity_id` | keyword | `host.name` | `host.name` |
-| `ueba.entity_type` | keyword | `host` | `host` |
-| `ueba.source` | keyword | `sysmon` / `winevtlog` | `auditd` / `sshd` |
+| `session_host` | keyword | — | osquery `logged_in_users.host` (tty или remote host) |
+| `event.is_offhours` | boolean | все события, из `@timestamp` | все события, из `@timestamp` |
+| `event.hour_of_day` | integer | все события, из `@timestamp` | все события, из `@timestamp` |
+| `agent.name` | keyword | `host.name` | `host.name` (из `hostname` fluent-bit) |
+| `decoder.name` | keyword | `sysmon` / `winevtlog` | `auditd` / `sshd` / `osquery` |
+| `location` | keyword | `eventlog` | `/var/log/audit/audit.log`, `journald`, `/var/log/osquery/*.log` |
+| `rule.id` | keyword | Wazuh rule ID | Wazuh rule ID |
+| `rule.level` | integer | 1–15 (Wazuh severity) | 1–15 (Wazuh severity) |
+| `rule.description` | keyword | Wazuh rule text | Wazuh rule text |
+| `rule.groups` | keyword[] | `["authentication_success", ...]` | `["audit_command", ...]` |
+| `rule.mitre.id` | keyword[] | `["T1078"]` | `["T1059"]` |
+| `rule.mitre.tactic` | keyword[] | `["Initial Access"]` | `["Execution"]` |
+| `rule.mitre.technique` | keyword[] | `["Valid Accounts"]` | `["Command and Scripting Interpreter"]` |
 
 ---
 
@@ -100,7 +111,7 @@
 | Индекс | `event.category` | Источники |
 |--------|-----------------|-----------|
 | `process-events-*` | `process` | Sysmon EID 1, auditd execve, osquery processes diff |
-| `auth-events-*` | `authentication` | EventLog 4624/4625/4648, sshd journald, auditd USER_AUTH |
+| `auth-events-*` | `authentication` | EventLog 4624/4625/4648, sshd journald, auditd USER_AUTH, osquery logged_in_users diff |
 | `network-events-*` | `network` | Sysmon EID 3, Suricata NetFlow |
 | `config-events-*` | `configuration` | EventLog 7045, Sysmon EID 12/13, osquery diff (services, drivers, tasks, registry) |
 | `file-events-*` | `file` | Sysmon EID 11 |
