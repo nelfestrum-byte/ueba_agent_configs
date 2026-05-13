@@ -177,8 +177,13 @@
 
     - name: Валидировать конфиг osquery
       ansible.builtin.command:
-        cmd: osqueryd --config_path=/etc/osquery/osquery.conf --config_check
+        cmd: osqueryd --config_path=/etc/osquery/osquery.conf --config_check --database_path=/tmp/osquery-configcheck
       changed_when: false
+
+    - name: Удалить временную БД после валидации osquery
+      ansible.builtin.file:
+        path: /tmp/osquery-configcheck
+        state: absent
 
     - name: Включить и запустить osqueryd
       ansible.builtin.systemd:
