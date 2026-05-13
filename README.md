@@ -2,8 +2,8 @@
 
 Два прод-сценария и локальный dev-стенд:
 
-1. **Logstash** — разворачивается на выделенном хосте через Docker, пишет в внешний OpenSearch (HTTPS + Security plugin).
-2. **Агенты** — osquery, fluent-bit, auditd на Debian 12 VM; события идут по TCP в Logstash.
+1. **Logstash** — разворачивается на выделенном хосте через Docker, пишет во внешний OpenSearch (HTTPS + Security plugin).
+2. **Агенты** — osquery, fluent-bit, auditd на Debian/Ubuntu VM; события идут по TCP в Logstash.
 3. **Dev-стенд** — локальный прогон пайплайна: OpenSearch + Dashboards + Logstash, без агентских контейнеров.
 
 ---
@@ -17,26 +17,36 @@
 - Доступ к Docker Hub или внутреннему registry (для `docker pull`)
 - Сеть: TCP 5044–5049 доступны агентским машинам
 
-### Подготовка
+### Первоначальная настройка (один раз)
 
-1. **CA-сертификат OpenSearch** — положить в `logstash/deploy/files/opensearch-ca.pem` (gitignore'd).
+Файлы `inventory.ini` и `group_vars/all.yml` не хранятся в репозитории — создайте их из примеров:
 
-2. **Пароль OpenSearch** — сохранить через ansible-vault:
-   ```bash
-   ansible-vault create logstash/deploy/host_vars/<hostname>.yml
-   # Содержимое: opensearch_password: "<пароль>"
-   ```
+```bash
+cd logstash/deploy
+cp inventory.ini.example inventory.ini
+cp group_vars/all.yml.example group_vars/all.yml
+```
 
-3. **Инвентарь** — указать целевой хост в `logstash/deploy/inventory.ini`:
-   ```ini
-   [logstash]
-   logstash-prod  ansible_host=10.0.0.5
-   ```
+Отредактируйте `inventory.ini` — укажите целевой хост:
+```ini
+[logstash]
+logstash-prod  ansible_host=10.0.0.5
+```
 
-4. **Переменные** — проверить `logstash/deploy/group_vars/all.yml`:
-   - `opensearch_url` — HTTPS-эндпоинт OpenSearch
-   - `opensearch_user` — пользователь для записи индексов
-   - `logstash_bind_addr` — интерфейс для биндинга портов (по умолчанию `0.0.0.0`)
+Отредактируйте `group_vars/all.yml` — укажите параметры вашего OpenSearch:
+```yaml
+opensearch_url: "https://opensearch.prod.example.com:9200"
+opensearch_user: "logstash_writer"
+# logstash_bind_addr: 10.0.0.5  # раскомментировать для биндинга на конкретный интерфейс
+```
+
+**CA-сертификат OpenSearch** — положить в `logstash/deploy/files/opensearch-ca.pem` (gitignore'd).
+
+**Пароль OpenSearch** — сохранить через ansible-vault:
+```bash
+ansible-vault create logstash/deploy/host_vars/<hostname>.yml
+# Содержимое файла: opensearch_password: "<пароль>"
+```
 
 ### Первое развертывание
 
@@ -66,32 +76,43 @@ curl -sf http://localhost:9600/_node/stats | python3 -m json.tool | grep -A2 '"e
 
 ---
 
-## 2. Развертывание агентов на Debian VM
+## 2. Развертывание агентов на Debian/Ubuntu VM
 
 ### Требования
 
-- Debian 12 (bookworm)
+- Debian/Ubuntu (apt required)
 - Пользователь `deploy` с правами sudo
 - Интернет-доступ к `pkg.osquery.io` и `packages.fluentbit.io`
   (или внутреннее зеркало — см. `apt_mirror_url` ниже)
 
-### Настройка
+### Первоначальная настройка (один раз)
 
-1. **Инвентарь** — указать VM в `agents/deploy/inventory.ini`:
-   ```ini
-   [ueba_agents]
-   agent01  ansible_host=10.0.1.11
-   agent02  ansible_host=10.0.1.12
-   ```
+Файлы `inventory.ini` и `group_vars/all.yml` не хранятся в репозитории — создайте их из примеров:
 
-2. **Переменные** в `agents/deploy/group_vars/all.yml`:
-   - `logstash_host` — hostname или IP Logstash-хоста
-   - `apt_mirror_url` — (опционально) внутреннее зеркало apt:
-     ```yaml
-     apt_mirror_url: http://mirror.example.local/apt
-     osquery_apt_repo_url: "{{ apt_mirror_url }}/osquery"
-     fluent_bit_apt_repo_url: "{{ apt_mirror_url }}/fluent-bit"
-     ```
+```bash
+cd agents/deploy
+cp inventory.ini.example inventory.ini
+cp group_vars/all.yml.example group_vars/all.yml
+```
+
+Отредактируйте `inventory.ini` — укажите VM:
+```ini
+[ueba_agents]
+agent01  ansible_host=10.0.1.11
+agent02  ansible_host=10.0.1.12
+```
+
+Отредактируйте `group_vars/all.yml` — укажите адрес Logstash:
+```yaml
+logstash_host: 10.0.0.5   # hostname или IP хоста с Logstash
+```
+
+Для внутреннего зеркала apt — раскомментировать и заполнить:
+```yaml
+apt_mirror_url: http://mirror.example.local/apt
+osquery_apt_repo_url: "{{ apt_mirror_url }}/osquery"
+fluent_bit_apt_repo_url: "{{ apt_mirror_url }}/fluent-bit"
+```
 
 ### Установка
 
@@ -148,7 +169,7 @@ bash dev_stand/scripts/send-osquery.sh   # → config-events-*
 
 ## Известные ограничения
 
-- **TLS-сертификаты**: CA-сертификат не отслеживается git'ом — нужно вручную разложить перед первым деплоем Logstash.
-- **Права пользователя installer**: должен быть в группе `docker`; если нет — включить `ansible_become=true` в inventory.
-- **Версии пакетов**: по умолчанию устанавливается latest из репозитория; чтобы зафиксировать — раскомментировать `osquery_version` / `fluent_bit_version` в `agents/deploy/group_vars/all.yml`.
+- **TLS-сертификаты**: CA-сертификат не отслеживается git'ом — нужно положить вручную перед первым деплоем Logstash.
+- **Права пользователя installer**: должен быть в группе `docker`; если нет — включить `ansible_become=true` в `inventory.ini`.
+- **Версии пакетов**: по умолчанию устанавливается `latest` из репозитория; чтобы зафиксировать — раскомментировать `osquery_version` / `fluent_bit_version` в `group_vars/all.yml`.
 - **auditd в контейнерах**: полный аудит syscall требует привилегированного режима; dev-стенд не эмулирует агентские машины.

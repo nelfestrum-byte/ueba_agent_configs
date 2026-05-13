@@ -1,6 +1,14 @@
 .claude/
 
-# Секреты развертывания Logstash
+# Секреты и локальные настройки Logstash-деплоя
 logstash/deploy/.env
 logstash/deploy/host_vars/*.yml
 logstash/deploy/files/opensearch-ca.pem
+# Рабочие копии — создаются из *.example перед первым деплоем
+logstash/deploy/inventory.ini
+logstash/deploy/group_vars/all.yml
+
+# Локальные настройки агентов
+# Рабочие копии — создаются из *.example перед первым деплоем
+agents/deploy/inventory.ini
+agents/deploy/group_vars/all.yml
