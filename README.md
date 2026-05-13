@@ -82,8 +82,9 @@ curl -sf http://localhost:9600/_node/stats | python3 -m json.tool | grep -A2 '"e
 
 - Debian/Ubuntu (apt required)
 - Пользователь `deploy` с правами sudo
-- Интернет-доступ к `pkg.osquery.io` и `packages.fluentbit.io`
-  (или внутреннее зеркало — см. `apt_mirror_url` ниже)
+- Доступ к Debian-репозиторию (базовые пакеты)
+- Для osquery и fluent-bit: интернет к `pkg.osquery.io` / `packages.fluentbit.io`
+  **или** офлайн-установка из локальных `.deb` (см. ниже)
 
 ### Первоначальная настройка (один раз)
 
@@ -113,6 +114,31 @@ apt_mirror_url: http://mirror.example.local/apt
 osquery_apt_repo_url: "{{ apt_mirror_url }}/osquery"
 fluent_bit_apt_repo_url: "{{ apt_mirror_url }}/fluent-bit"
 ```
+
+### Офлайн-установка (vendor-репозитории недоступны)
+
+Если целевые VM не имеют доступа к `pkg.osquery.io` / `packages.fluentbit.io`,
+скачайте пакеты на машине с доступом через Docker:
+
+```powershell
+# Windows (Docker Desktop required)
+.\agents\deploy\fetch-packages\fetch.ps1
+
+# Если fluent-bit для trixie недоступен — взять из bookworm
+.\agents\deploy\fetch-packages\fetch.ps1 -FbDist bookworm
+```
+
+Скрипт соберёт образ `debian:trixie`, скачает `.deb` и положит их в `agents/deploy/files/`.
+После этого включите офлайн-режим в `group_vars/all.yml`:
+
+```yaml
+use_local_packages: true
+osquery_local_deb: "osquery_5.12.1-1.linux_amd64.deb"   # точное имя из files/
+fluent_bit_local_deb: "fluent-bit_3.3.5_amd64.deb"
+```
+
+Плейбук скопирует `.deb` на целевые VM и установит через `apt` (зависимости из Debian-репо).
+Файлы `*.deb` не хранятся в git.
 
 ### Установка
 
@@ -171,5 +197,6 @@ bash dev_stand/scripts/send-osquery.sh   # → config-events-*
 
 - **TLS-сертификаты**: CA-сертификат не отслеживается git'ом — нужно положить вручную перед первым деплоем Logstash.
 - **Права пользователя installer**: должен быть в группе `docker`; если нет — включить `ansible_become=true` в `inventory.ini`.
-- **Версии пакетов**: по умолчанию устанавливается `latest` из репозитория; чтобы зафиксировать — раскомментировать `osquery_version` / `fluent_bit_version` в `group_vars/all.yml`.
+- **Версии пакетов**: в онлайн-режиме устанавливается `latest`; в офлайн-режиме версия определяется скачанным `.deb` файлом.
+- **Офлайн-пакеты**: `agents/deploy/files/*.deb` не хранятся в git; при смене версии перезапустите `fetch.ps1` и обновите имена в `group_vars/all.yml`.
 - **auditd в контейнерах**: полный аудит syscall требует привилегированного режима; dev-стенд не эмулирует агентские машины.

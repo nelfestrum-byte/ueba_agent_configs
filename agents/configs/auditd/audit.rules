@@ -53,7 +53,8 @@
 
 # ── SSH ключи ────────────────────────────────────────────────────────────────
 -a always,exit -F arch=b64 -S open,openat -F dir=/root/.ssh -k ssh_keys
--a always,exit -F arch=b64 -S open,openat -F dir=/home -F name=authorized_keys -k ssh_keys
+# -F name=authorized_keys не поддерживается в auditd < 3.0 (Debian Buster).
+# Для auditd >= 3.0 можно добавить: -a always,exit -F arch=b64 -S open,openat -F dir=/home -F name=authorized_keys -k ssh_keys
 
 # ── Cron ─────────────────────────────────────────────────────────────────────
 -w /etc/cron.d/       -p wa -k cron_changes
