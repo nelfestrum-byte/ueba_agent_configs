@@ -22,8 +22,11 @@ opensearch_url: "https://opensearch.ueba.internal:9200"
 opensearch_user: "logstash_writer"
 # opensearch_password: см. ansible-vault (host_vars/<host>.yml)
 
-# SSL: true включает TLS и верификацию CA-сертификата в ueba-main.conf
+# SSL: true включает TLS-шифрование
 opensearch_ssl: "true"
+# SSL verify: false — отключает проверку SAN (если cert выдан на hostname, а не IP).
+# Шифрование остаётся включённым. Выставить false, если OPENSEARCH_URL — IP-адрес.
+opensearch_ssl_verify: "true"
 
 # CA-сертификат для верификации TLS
 opensearch_ca_cert_src: "files/opensearch-ca.pem"
