@@ -4,10 +4,18 @@
 # Что делает плейбук:
 #   1. Подключает официальные apt-репозитории osquery и fluent-bit
 #      (или внутреннее зеркало, если задана переменная apt_mirror_url)
-#   2. Устанавливает пакеты через apt
+#      — пропускается при use_local_packages: true
+#   2. Устанавливает пакеты через apt (онлайн или из локальных .deb)
 #   3. Раскладывает конфиги из agents/configs/
 #   4. Настраивает systemd drop-in для fluent-bit (LOGSTASH_HOST, HOSTNAME)
 #   5. Валидирует конфиги и запускает сервисы
+#
+# Режим offline (use_local_packages: true):
+#   Положите .deb файлы в agents/deploy/files/ и укажите имена в group_vars/all.yml:
+#     use_local_packages: true
+#     osquery_local_deb: osquery_5.12.1-1.linux_amd64.deb
+#     fluent_bit_local_deb: fluent-bit_3.3.5_amd64.deb
+#   Зависимости пакетов ставятся из системного Debian-репозитория как обычно.
 #
 # Использование:
 #   cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
@@ -49,13 +57,14 @@
         - /usr/share/keyrings
 
   tasks:
-    # ── 1. apt-репозитории ─────────────────────────────────────────────────────
+    # ── 1. apt-репозитории (только в онлайн-режиме) ───────────────────────────
 
     - name: Добавить ключ osquery
       ansible.builtin.get_url:
         url: "{{ osquery_apt_key_url }}"
         dest: /usr/share/keyrings/osquery-keyring.gpg
         mode: "0644"
+      when: not (use_local_packages | default(false))
 
     - name: Добавить apt-репозиторий osquery
       ansible.builtin.apt_repository:
@@ -64,22 +73,26 @@
           {{ osquery_apt_repo_url }} deb main
         filename: osquery
         state: present
+      when: not (use_local_packages | default(false))
 
     - name: Добавить ключ fluent-bit
       ansible.builtin.get_url:
         url: "{{ fluent_bit_apt_key_url }}"
         dest: /usr/share/keyrings/fluent-bit-keyring.gpg
         mode: "0644"
+      when: not (use_local_packages | default(false))
 
     - name: Добавить apt-репозиторий fluent-bit
       ansible.builtin.apt_repository:
         repo: "deb [signed-by=/usr/share/keyrings/fluent-bit-keyring.gpg] {{ fluent_bit_apt_repo_url }}/{{ ansible_distribution | lower }}/{{ ansible_distribution_release }} {{ ansible_distribution_release }} main"
         filename: fluent-bit
         state: present
+      when: not (use_local_packages | default(false))
 
     # ── 2. Установка пакетов ───────────────────────────────────────────────────
 
-    - name: Установить osquery, fluent-bit, auditd
+    # -- Онлайн-режим: всё через apt из подключённых репозиториев
+    - name: Установить osquery, fluent-bit, auditd (онлайн)
       ansible.builtin.apt:
         name:
           - osquery
@@ -88,6 +101,45 @@
           - audispd-plugins
         state: latest
         update_cache: true
+      when: not (use_local_packages | default(false))
+
+    # -- Офлайн-режим: auditd из Debian-репо, vendor-пакеты из локальных .deb
+
+    - name: Установить auditd из системного репозитория (офлайн-режим)
+      ansible.builtin.apt:
+        name:
+          - auditd
+          - audispd-plugins
+        state: latest
+        update_cache: true
+      when: use_local_packages | default(false)
+
+    - name: Скопировать локальные .deb пакеты на целевые хосты
+      ansible.builtin.copy:
+        src: "files/{{ item }}"
+        dest: "/tmp/{{ item }}"
+        mode: "0644"
+      loop:
+        - "{{ osquery_local_deb }}"
+        - "{{ fluent_bit_local_deb }}"
+      when: use_local_packages | default(false)
+
+    - name: Установить osquery и fluent-bit из локальных .deb (apt разрешит зависимости)
+      ansible.builtin.apt:
+        deb: "/tmp/{{ item }}"
+      loop:
+        - "{{ osquery_local_deb }}"
+        - "{{ fluent_bit_local_deb }}"
+      when: use_local_packages | default(false)
+
+    - name: Удалить временные .deb файлы
+      ansible.builtin.file:
+        path: "/tmp/{{ item }}"
+        state: absent
+      loop:
+        - "{{ osquery_local_deb | default('') }}"
+        - "{{ fluent_bit_local_deb | default('') }}"
+      when: use_local_packages | default(false)
 
     # ── 3. auditd ──────────────────────────────────────────────────────────────
 

@@ -6,12 +6,42 @@
 # Куда fluent-bit отправляет события (IP или hostname Logstash-хоста)
 logstash_host: logstash.example.local
 
-# URL репозиториев (по умолчанию — официальные публичные).
+# =============================================================================
+# Режим установки пакетов
+# =============================================================================
+#
+# use_local_packages: false  — онлайн (по умолчанию): пакеты скачиваются
+#                              из официальных репозиториев вендоров.
+#
+# use_local_packages: true   — офлайн: .deb файлы копируются с control node
+#                              на целевые хосты и устанавливаются через apt.
+#                              Зависимости разрешаются из Debian-репозитория.
+#
+#   Как подготовить:
+#     1. Скачайте .deb с доступной машины:
+#          osquery  → https://pkg.osquery.io/deb/  (файл вида osquery_X.Y.Z-1.linux_amd64.deb)
+#          fluent-bit → https://packages.fluentbit.io/debian/trixie/
+#                       (файл вида fluent-bit_X.Y.Z_amd64.deb)
+#     2. Положите оба файла в agents/deploy/files/
+#     3. Укажите точные имена файлов ниже
+#     4. Запустите плейбук как обычно
+
+use_local_packages: false
+
+# Имена файлов в agents/deploy/files/ (используются только при use_local_packages: true)
+osquery_local_deb: "osquery_5.12.1-1.linux_amd64.deb"
+fluent_bit_local_deb: "fluent-bit_3.3.5_amd64.deb"
+
+# =============================================================================
+# URL репозиториев (используются только при use_local_packages: false)
+# =============================================================================
+#
 # Если у целевых хостов нет прямого интернета, замените на зеркало:
 #   apt_mirror_url: http://mirror.example.local/apt
 # Тогда:
 #   osquery_apt_repo_url: "{{ apt_mirror_url }}/osquery"
 #   fluent_bit_apt_repo_url: "{{ apt_mirror_url }}/fluent-bit"
+
 osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
 osquery_apt_repo_url: "https://pkg.osquery.io/deb"
 

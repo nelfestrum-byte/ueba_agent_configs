@@ -12,3 +12,6 @@ logstash/deploy/group_vars/all.yml
 # Рабочие копии — создаются из *.example перед первым деплоем
 agents/deploy/inventory.ini
 agents/deploy/group_vars/all.yml
+
+# Офлайн-пакеты (скачиваются через fetch-packages/fetch.ps1, в git не коммитятся)
+agents/deploy/files/*.deb
