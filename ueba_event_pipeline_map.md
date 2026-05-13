@@ -17,6 +17,7 @@
 | `process_start` | Windows | fluent-bit `winevtlog` | Sysmon EID 1 | winevtlog JSON → beats:5044 → Logstash: `Image→process.executable`, `CommandLine`, `User`, `Hashes` → enrich: `entity_id=host.name`, `from_suspicious_path` | `process-events-*` | **first_seen**, suspicious path | Новый exe path, запуск из `/tmp`, `AppData` |
 | `process_start` | Linux | fluent-bit `systemd` | auditd `execve syscall=59` | journald MESSAGE → tcp:5045 → Logstash grok SYSCALL: `exe`, `comm`, `auid`, `uid`, `ppid` → normalize: `exe→process.executable`, `comm→process.name` → enrich: `entity_id=host.name` | `process-events-*` | **first_seen**, suspicious path | Тот же индекс — правило единое для Win+Linux |
 | `process_start` | Linux | osquery `diff` | `processes` table | osqueryd results.log → fluent-bit tail → Lua `flatten_diff`: `action=added`, `name`, `path`, `cmdline`, `uid`, `parent`, `username`, `parent_name` → tcp:5048 → Logstash → normalize: `name→process.name`, `path→process.executable`, `cmdline→process.command_line`, `username→user.name`, `uid→user.id`, `parent→process.parent.pid`, `parent_name→process.parent.name` | `process-events-*` | **first_seen** | Тот же индекс: кто запустил, с каким cmdline, родительский процесс |
+| `process_start` (cmdline) | Linux | fluent-bit `systemd` | auditd `PROCTITLE` | journald PROCTITLE record → tcp:5045 → Logstash: grok `proctitle=<hex|str>` → Ruby: hex декод + `\x00→пробел` → `process.command_line`; `event.category=process`, `event.action=process_start` | `process-events-*` | **first_seen** | Полная командная строка из PROCTITLE (дополняет SYSCALL execve, у которого нет cmdline) |
 
 ---
 
@@ -28,6 +29,7 @@
 | `login` / `login_failed` | Linux | fluent-bit `systemd` | sshd journald / auditd `USER_AUTH` | journald sshd MESSAGE → tcp:5047 → Logstash grok: `user`, `src_ip`, `auth_method`, `Accepted/Failed` → enrich: `hour_of_day`, `is_offhours` | `auth-events-*` | **AD**, **offhours**, **brute force** | Тот же индекс — правило единое Win+Linux |
 | `session_change` | Linux | osquery `diff` | `logged_in_users` table | osqueryd results.log → fluent-bit tail → Lua `flatten_diff`: `action=added/removed`, `user`, `type`, `host`, `time`, `pid` → tcp:5048 → Logstash → normalize: `user→user.name`, `host→session_host`, `pid→process.pid` | `auth-events-*` | **AD**, **first_seen** | Активные сессии: TTY/SSH, появление/закрытие; корреляция с login/logout |
 | `privilege_use` | Windows | fluent-bit `winevtlog` | Security EID 4648 (runas) | Security channel → tcp:5046 → Logstash: `action=privilege_use`, `user.name`, `target_user` | `auth-events-*` | **Детерм. правило** | Любой runas → webhook немедленно |
+| `privilege_use` | Linux | fluent-bit `systemd` | auditd `execve` + `-F path=/usr/bin/sudo` / `/usr/bin/su` (key=sudo_exec) | journald SYSCALL record → tcp:5045 → Logstash: grok SYSCALL → key extraction grok (`key="sudo_exec"`) → `event.category=authentication`, `event.action=privilege_use`, `process.executable`, `process.name`, `user.id`, `user.audit_id`; rule.id=5402, level=8 | `auth-events-*` | **Детерм. правило** | Любой sudo/su → auth-events; MITRE T1548 Privilege Escalation |
 
 ---
 
@@ -37,6 +39,7 @@
 |---|---|---|---|---|---|---|---|
 | `network_connection` | Windows | fluent-bit `winevtlog` | Sysmon EID 3 | Sysmon/Operational → beats:5044 → Logstash: `Image→process.executable`, `DestinationIp/Port`, `SourceIp/Port` → normalize: `destination.ip`, `destination.port` | `network-events-*` | **AD** (unique_dst_ip через Transform), **first_seen** | AD: `unique_dst_ip_1h`; правило: новый `(entity, dst_ip, dst_port)` за 30 дней |
 | `network_connection` | Windows + Linux | Suricata | NetFlow / eve.json | eve.json → fluent-bit tail → tcp:5049 → Logstash: `src_ip→source.ip`, `dest_ip→destination.ip`, `dest_port` → inventory lookup: `src_ip→entity_id` | `network-events-*` | **AD**, **first_seen** | Основной источник сетевых аномалий |
+| `network_connection` | Linux | osquery `diff` | `process_open_sockets` table (`process_connections` query) | osqueryd results.log added → fluent-bit tail → Lua `flatten_diff`: `pid`, `remote_address`, `remote_port`, `local_address`, `local_port`, `protocol`, `state`, `process_name`, `process_path`, `username` → tcp:5048 → Logstash → normalize: `remote_address→destination.ip`, `remote_port→destination.port`, `local_address→source.ip`, `local_port→source.port`, `process_name→process.name`, `process_path→process.executable`, `protocol→network.transport`, `state→network.state`; rule.id=99020, level=3 | `network-events-*` | **AD** (unique_dst_ip), **first_seen** | Исходящие соединения с привязкой к процессу; AD: `unique_dst_ip_per_process_15m`; MITRE T1071 C&C |
 | `open_sockets` (метрика) | Windows | osquery `snapshot` | `process_open_sockets` | results.log → fluent-bit tail → Lua `flatten_snapshot` → `{metric_name, value, entity_id}` | `host-metrics-*` | **AD** | RCF на числовой ряд `open_sockets_count` |
 
 ---
@@ -111,8 +114,8 @@
 | Индекс | `event.category` | Источники |
 |--------|-----------------|-----------|
 | `process-events-*` | `process` | Sysmon EID 1, auditd execve, osquery processes diff |
-| `auth-events-*` | `authentication` | EventLog 4624/4625/4648, sshd journald, auditd USER_AUTH, osquery logged_in_users diff |
-| `network-events-*` | `network` | Sysmon EID 3, Suricata NetFlow |
+| `auth-events-*` | `authentication` | EventLog 4624/4625/4648, sshd journald, auditd USER_AUTH, auditd sudo_exec (privilege_use), osquery logged_in_users diff |
+| `network-events-*` | `network` | Sysmon EID 3, Suricata NetFlow, osquery process_connections diff |
 | `config-events-*` | `configuration` | EventLog 7045, Sysmon EID 12/13, osquery diff (services, drivers, tasks, registry) |
 | `file-events-*` | `file` | Sysmon EID 11 |
 | `host-metrics-*` | `metric` | osquery snapshot (11 метрик) + Transform Jobs (logins_per_hour, unique_dst_ip_15m) |

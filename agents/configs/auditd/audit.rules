@@ -94,6 +94,10 @@
 -a always,exit -F arch=b64 -S setresuid -k privilege_change
 -a always,exit -F arch=b64 -S setresgid -k privilege_change
 
+# ── Выполнение sudo / su (privilege escalation via execve) ───────────────────
+-a always,exit -F arch=b64 -S execve -F path=/usr/bin/sudo -k sudo_exec
+-a always,exit -F arch=b64 -S execve -F path=/usr/bin/su   -k sudo_exec
+
 # ── Изменение времени системы (anti-tampering) ───────────────────────────────
 -a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time_change
 -w /etc/localtime -p wa -k time_change
