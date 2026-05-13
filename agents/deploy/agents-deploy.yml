@@ -73,9 +73,7 @@
 
     - name: Добавить apt-репозиторий fluent-bit
       ansible.builtin.apt_repository:
-        repo: >
-          deb [signed-by=/usr/share/keyrings/fluent-bit-keyring.gpg]
-          {{ fluent_bit_apt_repo_url }}/{{ ansible_distribution | lower }}/{{ ansible_distribution_release }} main
+        repo: "deb [signed-by=/usr/share/keyrings/fluent-bit-keyring.gpg] {{ fluent_bit_apt_repo_url }}/{{ ansible_distribution | lower }}/{{ ansible_distribution_release }} {{ ansible_distribution_release }} main"
         filename: fluent-bit
         state: present
 
