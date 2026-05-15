@@ -170,8 +170,8 @@
 
     - name: Создать keystore auditbeat
       ansible.builtin.command:
-        cmd: auditbeat keystore create
-        creates: /etc/auditbeat/auditbeat.keystore
+        cmd: auditbeat keystore create --force
+      changed_when: false
 
     - name: Записать LOGSTASH_HOST в keystore auditbeat
       ansible.builtin.shell:
@@ -205,8 +205,8 @@
 
     - name: Создать keystore filebeat
       ansible.builtin.command:
-        cmd: filebeat keystore create
-        creates: /etc/filebeat/filebeat.keystore
+        cmd: filebeat keystore create --force
+      changed_when: false
 
     - name: Записать LOGSTASH_HOST в keystore filebeat
       ansible.builtin.shell:
