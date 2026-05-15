@@ -2,18 +2,28 @@
 
 **Цель:** минимизировать потребление токенов через оптимизированную навигацию по проекту и точные инструкции.
 
+## Стек агентов
+
+| Сервис | Роль |
+|--------|------|
+| **auditbeat** | Заменяет auditd; читает kernel audit через netlink (execve, sudo, auth, file_integrity) |
+| **filebeat** | Читает osquery results.log (osquery module) + /var/log/auth.log (system/auth module) |
+| **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи |
+
+Beats отдают нативный ECS — Logstash не мутирует их поля, только маршрутизирует в стандартные индексы.
+
 ## Структура проекта
 
 ```
-ueba-stand/                              — корень репозитория (физическое имя не меняем)
+ueba-stand/
 │
 ├── logstash/
 │   ├── configs/
 │   │   ├── logstash.yml                 — настройки Logstash (workers, queue)
 │   │   ├── pipelines.yml                — список пайплайнов
 │   │   ├── pipeline/
-│   │   │   └── ueba-main.conf           — ГЛАВНЫЙ файл обработки событий
-│   │   └── patterns/                    — grok-паттерны (пустая директория, .gitkeep)
+│   │   │   └── ueba-main.conf           — ГЛАВНЫЙ файл: beats relay + Suricata/Windows
+│   │   └── patterns/                    — grok-паттерны (.gitkeep)
 │   └── deploy/
 │       ├── logstash-deploy.yml          — Ansible плейбук (docker pull + deploy)
 │       ├── ansible.cfg
@@ -25,28 +35,32 @@ ueba-stand/                              — корень репозитория
 │
 ├── agents/
 │   ├── configs/
-│   │   ├── fluent-bit/
-│   │   │   ├── fluent-bit.conf          — сбор sys/app логов
-│   │   │   ├── parsers.conf
-│   │   │   └── flatten.lua              — нормализация osquery JSON
-│   │   ├── osquery/osquery.conf         — запросы и интервалы
-│   │   └── auditd/audit.rules           — правила аудита
+│   │   ├── auditbeat/
+│   │   │   ├── auditbeat.yml.j2         — конфиг auditbeat (Ansible template)
+│   │   │   └── rules.d/ueba.conf        — правила аудита ядра
+│   │   ├── filebeat/
+│   │   │   └── filebeat.yml.j2          — конфиг filebeat (Ansible template)
+│   │   └── osquery/osquery.conf         — diff-запросы (без count/snapshot метрик)
 │   └── deploy/
-│       ├── agents-deploy.yml            — Ansible плейбук (apt online + конфиги)
+│       ├── agents-deploy.yml            — Ansible плейбук (apt/deb + конфиги)
+│       ├── agents-deploy-legacy.yml     — старый плейбук (auditd + fluent-bit)
 │       ├── ansible.cfg
 │       ├── inventory.ini
-│       └── group_vars/all.yml           — logstash_host, apt_mirror_url, версии
+│       ├── group_vars/all.yml           — logstash_host, версии пакетов
+│       ├── group_vars/all.yml.example   — шаблон переменных
+│       └── fetch-packages/              — скачать .deb для офлайн-деплоя
+│           ├── fetch.ps1
+│           └── Dockerfile
 │
 ├── dev_stand/
-│   ├── README.md                        — инструкции по стенду
+│   ├── README.md
 │   ├── docker-compose.yml               — OpenSearch + Dashboards + Logstash
 │   ├── opensearch/opensearch.yml
-│   └── scripts/                         — семплы событий для ручной отправки по TCP
+│   └── scripts/                         — семплы событий для ручной отправки
 │       ├── send-auditd.sh
 │       ├── send-sshd.sh
 │       └── send-osquery.sh
 │
-├── ueba_event_pipeline_map.md           — схема обработки событий (актуальная)
 ├── README.md
 └── .gitignore
 ```
@@ -55,26 +69,36 @@ ueba-stand/                              — корень репозитория
 
 | Тема | Файлы | Назначение |
 |------|-------|-----------|
-| **Пайплайн (прод)** | `logstash/configs/pipeline/ueba-main.conf` | Парсинг и обогащение событий |
+| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats relay + Suricata/Windows normalization |
 | **Конфиги Logstash** | `logstash/configs/logstash.yml`, `pipelines.yml` | Настройки рантайма |
 | **Деплой Logstash** | `logstash/deploy/logstash-deploy.yml` | Ansible: docker pull + copy + up |
 | **Переменные Logstash** | `logstash/deploy/group_vars/all.yml` | opensearch_url, SSL, image, bind_addr |
-| **Конфиги агентов** | `agents/configs/fluent-bit/`, `osquery/`, `auditd/` | Конфиги на целевых машинах |
-| **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: apt repos + install + конфиги |
-| **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, apt_mirror_url |
+| **Конфиг auditbeat** | `agents/configs/auditbeat/auditbeat.yml.j2` | auditd module + file_integrity module |
+| **Правила аудита** | `agents/configs/auditbeat/rules.d/ueba.conf` | execve, sudo, PAM, SSH, cron, модули |
+| **Конфиг filebeat** | `agents/configs/filebeat/filebeat.yml.j2` | osquery module + system/auth module |
+| **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
+| **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: deb install + шаблоны + ACL |
+| **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb |
 | **Dev-стенд** | `dev_stand/docker-compose.yml` | Локальный прогон без агентов |
-| **Тестовые события** | `dev_stand/scripts/` | Семплы для nc / socat |
+
+## Индексы OpenSearch
+
+| Индекс | Источник |
+|--------|---------|
+| `auditbeat-{version}-YYYY.MM.dd` | auditbeat: execve, sudo, auth, file changes |
+| `filebeat-{version}-YYYY.MM.dd` | filebeat: osquery diff + sshd auth.log |
+| `suricata-YYYY.MM.dd` | Suricata eve.json (TCP 5049) |
+| `winevtlog-YYYY.MM.dd` | Windows winevtlog (TCP 5046, stub) |
 
 ## Инструкции по сокращению токенов
 
 ### 1. Поиск по проекту
-- **Файлы**: `Glob` с паттерном (напр., `logstash/configs/**/*.conf`)
+- **Файлы**: `Glob` с паттерном (напр., `agents/configs/**/*.j2`)
 - **Содержимое**: `Grep` с регулярным выражением вместо чтения всего файла
 - **Не читайте без цели**: если нужно найти что-то конкретное — сначала Grep
 
 ### 2. Чтение больших конфигов
 - Для файлов > 50 строк указывайте `limit` и `offset` в Read
-- Используйте **line ranges** в ссылках: `[ueba-main.conf:407-424]`
 - Сначала Grep для поиска нужного участка, потом Read 5–10 строк вокруг него
 
 ### 3. Параллельное выполнение
@@ -82,23 +106,22 @@ ueba-stand/                              — корень репозитория
 - Это уменьшает количество обходов туда-сюда
 
 ### 4. Документирование
-- **Изменения конфигов**: комментарий в README.md
-- **Новые пайплайны**: обновить `ueba_event_pipeline_map.md`
+- **Изменения пайплайна**: обновить `ueba_event_pipeline_map.md` (если существует)
 - **Переменные деплоя Logstash**: `logstash/deploy/group_vars/all.yml`
 - **Переменные деплоя агентов**: `agents/deploy/group_vars/all.yml`
 
 ## Оптимизация для частых операций
 
-### Изменить логику пайплайна Logstash
+### Изменить пайплайн Logstash
 ```
-1. Grep в logstash/configs/pipeline/ueba-main.conf: найти нужный блок
+1. Grep в logstash/configs/pipeline/ueba-main.conf
 2. Read 10–15 строк вокруг найденного
-3. Edit — изменить конкретный участок
-4. В dev-стенде: cd dev_stand && docker compose restart logstash
-5. В проде: cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
+3. Edit нужный блок
+4. Dev: cd dev_stand && docker compose restart logstash
+5. Прод: cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
-### Изменить правила сбора (fluent-bit / osquery / auditd)
+### Изменить конфиг агентов (auditbeat / filebeat / osquery)
 ```
 1. Read agents/configs/<subsystem>/<file> целиком (все < 200 строк)
 2. Edit нужный блок
@@ -107,9 +130,9 @@ ueba-stand/                              — корень репозитория
 
 ### Развернуть Logstash на новом хосте
 ```
-1. Обновить logstash/deploy/inventory.ini (hostname/IP)
-2. Положить CA-сертификат в logstash/deploy/files/opensearch-ca.pem
-3. ansible-vault create logstash/deploy/host_vars/<host>.yml (пароль)
+1. Обновить logstash/deploy/inventory.ini
+2. Положить CA-сертификат: logstash/deploy/files/opensearch-ca.pem
+3. ansible-vault create logstash/deploy/host_vars/<host>.yml  (opensearch_password)
 4. cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
@@ -117,25 +140,24 @@ ueba-stand/                              — корень репозитория
 ```
 1. Обновить agents/deploy/inventory.ini
 2. Задать logstash_host в agents/deploy/group_vars/all.yml
-3. cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
+3. Скачать .deb пакеты: .\agents\deploy\fetch-packages\fetch.ps1
+4. cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 ```
 
 ## Команды для быстрого старта
 
 ```bash
 # Dev-стенд
-cd dev_stand
-docker compose up -d
+cd dev_stand && docker compose up -d
 docker compose logs -f logstash
-bash scripts/send-auditd.sh      # тестовое событие → process-events-*
 
 # Перезапустить Logstash после правки конфига (dev)
 docker compose restart logstash
 
 # Проверка индексов OpenSearch
-curl -s http://localhost:9200/_cat/indices?v | head -20
+curl -s 'http://localhost:9200/_cat/indices?v&index=auditbeat-*,filebeat-*,suricata-*' | sort
 
-# Деплой Logstash в прод (из корня репо)
+# Деплой Logstash в прод
 cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
 
 # Деплой агентов
@@ -144,22 +166,19 @@ cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 # Syntax-check плейбуков
 ansible-playbook --syntax-check logstash/deploy/logstash-deploy.yml
 ansible-playbook --syntax-check agents/deploy/agents-deploy.yml
+
+# Проверка агентов на хосте
+systemctl status auditbeat filebeat osqueryd
+auditbeat test output && filebeat test output
 ```
-
-## Ключевые метрики
-
-- **OpenSearch индексы**: `host-metrics-*`, `auth-events-*`, `process-events-*`, `config-events-*`, `network-events-*`
-- **fluent-bit порты Logstash**: auditd→5045, sshd→5047, osquery→5048, suricata→5049, beats→5044
-- **osquery интервалы**: snapshot 30–120 сек, diff 30–120 сек
-- **Logstash throughput**: `curl http://localhost:9600/_node/stats` (events.out)
 
 ## Что НЕ читать
 
 - `.git/` — используйте `git log` вместо чтения объектов
 - `*.log` — используйте `docker compose logs -n 50` или `journalctl -n 50`
-- `dev_stand/docker-compose.yml` целиком — ищите сервис по Grep, потом читайте 10 строк
+- `agents/deploy/files/*.deb` — бинарные пакеты, в git не хранятся
 
 ---
 
-**Последнее обновление:** 2026-05-12
-**Версия проекта:** refactor/prod-ready
+**Последнее обновление:** 2026-05-15
+**Версия проекта:** beats-ecs / auditbeat+filebeat+osquery → OpenSearch
