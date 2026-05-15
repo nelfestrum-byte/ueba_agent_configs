@@ -3,46 +3,38 @@
 -- в одну обогащённую запись.
 --
 -- Стратегия:
---   - Буферизуем строки в глобальной таблице по serial
---   - Флашим запись когда: (1) встречаем EOE, (2) serial меняется и
---     предыдущий старше TIMEOUT секунд, (3) размер буфера > MAX_BUF
+--   1. Каждую входящую запись сразу мержим в буфер по serial.
+--   2. После мержа проверяем буфер на протухшие serial'ы (wall clock > TIMEOUT).
+--      Если есть — флашим один и возвращаем его в поток.
+--   3. Если протухших нет — дропаем текущую запись (-1); она уже в буфере.
+--   4. EOE-запись (auditd < 4.0) флашит serial немедленно.
 --
 -- ВНИМАНИЕ: fluent-bit вызывает Lua однопоточно, глобальное состояние безопасно.
+-- os.time() используется для wall clock timeout (os.clock() — CPU time, не подходит).
 
 local buf     = {}   -- { [serial] = merged_record }
-local last_ts = {}   -- { [serial] = os.clock() }
-local TIMEOUT = 3.0  -- секунды ожидания после последнего события
-local MAX_BUF = 512  -- максимум накопленных незакрытых serial'ов
+local last_ts = {}   -- { [serial] = os.time() }
+local TIMEOUT = 5    -- секунд ожидания после последнего события в наборе
+local MAX_BUF = 512  -- максимум незакрытых serial'ов в буфере
 
--- Список типов событий, которые формируют "набор" SYSCALL
-local SYSCALL_SET = {
-    SYSCALL=true, CWD=true, PATH=true, PROCTITLE=true,
-    EXECVE=true, SOCKETCALL=true, SOCKADDR=true,
-}
-
--- Разбираем строку "key=value key2=val2" или "key="quoted val""
 local function parse_kv(s)
     local out = {}
-    -- Сначала обрабатываем quoted значения
     local rest = s:gsub('(%w+)="([^"]*)"', function(k, v)
         out[k] = v
         return ""
     end)
-    -- Затем unquoted
     for k, v in rest:gmatch('([%w_%-]+)=(%S+)') do
         out[k] = v
     end
     return out
 end
 
--- Декодируем hex-закодированные строки auditd (proctitle, a0..a3)
 local function decode_hex(s)
     if not s then return s end
     if s:match('^%x+$') and #s % 2 == 0 and #s > 2 then
         local decoded = s:gsub('%x%x', function(h)
             return string.char(tonumber(h, 16))
         end)
-        -- Заменяем нулевые байты на пробел (аргументы execve)
         return decoded:gsub('%z', ' '):gsub('%s+$', '')
     end
     return s
@@ -50,7 +42,7 @@ end
 
 local function flush_record(serial)
     local rec = buf[serial]
-    buf[serial]    = nil
+    buf[serial]     = nil
     last_ts[serial] = nil
     return rec
 end
@@ -61,20 +53,9 @@ local function buf_size()
     return n
 end
 
-function merge_auditd(tag, timestamp, record)
-    local serial = tostring(record["serial"] or "")
-    local atype  = record["audit_type"] or "UNKNOWN"
-    local msg    = record["msg"] or ""
-    local now    = os.clock()
-
-    -- Событие без serial — отдаём как есть
-    if serial == "" then
-        return 1, timestamp, record
-    end
-
-    -- ── Инициализация буфера для нового serial ──
+-- Мержит одну запись auditd в буфер по serial; возвращает запись буфера.
+local function merge_into_buf(serial, atype, msg, timestamp)
     if not buf[serial] then
-        -- Если буфер переполнен — флашим самый старый
         if buf_size() >= MAX_BUF then
             local oldest_s, oldest_t = nil, math.huge
             for s, t in pairs(last_ts) do
@@ -82,7 +63,6 @@ function merge_auditd(tag, timestamp, record)
             end
             if oldest_s then flush_record(oldest_s) end
         end
-
         buf[serial] = {
             serial       = serial,
             timestamp    = timestamp,
@@ -92,9 +72,8 @@ function merge_auditd(tag, timestamp, record)
     end
 
     local entry = buf[serial]
-    last_ts[serial] = now
+    last_ts[serial] = os.time()
 
-    -- ── Парсим и мержим поля в зависимости от типа ──
     local kv = parse_kv(msg)
 
     if atype == "SYSCALL" then
@@ -110,7 +89,6 @@ function merge_auditd(tag, timestamp, record)
         entry["cwd"] = kv["cwd"]
 
     elseif atype == "PATH" then
-        -- PATH может быть несколько (item=0, item=1...)
         local item = kv["item"] or tostring(#entry["_paths"])
         entry["_paths"][#entry["_paths"]+1] = {
             item    = item,
@@ -127,7 +105,6 @@ function merge_auditd(tag, timestamp, record)
         entry["proctitle"] = decode_hex(kv["proctitle"])
 
     elseif atype == "EXECVE" then
-        -- Аргументы execve: argc, a0, a1, a2...
         entry["execve_argc"] = kv["argc"]
         for k, v in pairs(kv) do
             if k:match('^a%d+$') then
@@ -140,7 +117,6 @@ function merge_auditd(tag, timestamp, record)
         entry["socket_saddr"]  = kv["saddr"]
 
     elseif atype:match("^USER_") or atype == "LOGIN" then
-        -- USER_LOGIN, USER_AUTH, USER_CMD и пр.
         entry["user_event_type"] = atype
         for k, v in pairs(kv) do
             entry["user_" .. k] = v
@@ -151,33 +127,45 @@ function merge_auditd(tag, timestamp, record)
         entry["netfilter_family"] = kv["family"]
 
     else
-        -- Всё остальное — сохраняем с префиксом типа
         for k, v in pairs(kv) do
             entry[atype:lower() .. "_" .. k] = v
         end
     end
 
-    -- Добавляем тип события в список
     local types = entry["_event_types"] or {}
     types[atype] = true
     entry["_event_types"] = types
 
-    -- ── Проверяем готовность к флашу ──
+    return entry
+end
 
-    -- EOE = явный конец набора
-    if atype == "EOE" then
-        return 2, entry.timestamp, flush_record(serial)
+function merge_auditd(tag, timestamp, record)
+    local serial = tostring(record["serial"] or "")
+    local atype  = record["audit_type"] or "UNKNOWN"
+    local msg    = record["msg"] or ""
+    local now    = os.time()
+
+    -- Событие без serial — отдаём как есть
+    if serial == "" then
+        return 1, timestamp, record
     end
 
-    -- Флашим старые серийники с таймаутом (не текущий)
-    -- Ограничение fluent-bit Lua: невозможно вернуть несколько записей за раз.
-    -- Старые записи флашатся при следующем входящем событии.
+    -- Мержим текущую запись в буфер (всегда, до любых проверок)
+    local entry = merge_into_buf(serial, atype, msg, timestamp)
+
+    -- EOE = явный конец набора (auditd < 4.0); флашим немедленно
+    if atype == "EOE" then
+        return 1, entry.timestamp, flush_record(serial)
+    end
+
+    -- Ищем любой протухший serial и флашим его
+    -- last_ts[serial] только что обновлён → текущий serial не протухнет здесь
     for s, t in pairs(last_ts) do
-        if s ~= serial and (now - t) > TIMEOUT then
-            flush_record(s)
+        if (now - t) >= TIMEOUT then
+            return 1, buf[s].timestamp, flush_record(s)
         end
     end
 
-    -- Текущее событие добавлено в буфер — удаляем из потока
+    -- Текущая запись в буфере — убираем из потока
     return -1, timestamp, record
 end
