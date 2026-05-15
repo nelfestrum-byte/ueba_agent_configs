@@ -11,10 +11,6 @@
 #                         setfacl -m u:filebeat:r /var/log/osquery/osqueryd.results.log
 #                         (повторять после logrotate — добавить в postrotate)
 #
-# Keystore (LOGSTASH_HOST):
-#   filebeat keystore create
-#   echo "logstash.internal:5044" | filebeat keystore add LOGSTASH_HOST --stdin
-#
 # Проверка:
 #   filebeat test config -c /etc/filebeat/filebeat.yml
 #   filebeat test output
@@ -66,7 +62,7 @@ processors:
 
 # ── Выход → Logstash beats input ─────────────────────────────────────────────
 output.logstash:
-  hosts: ["${LOGSTASH_HOST}:5044"]
+  hosts: ["{{ logstash_host }}:5044"]
   # tls:
   #   certificate_authorities: ["/etc/filebeat/opensearch-ca.pem"]
 

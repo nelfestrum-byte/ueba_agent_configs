@@ -151,8 +151,8 @@
     # ── 4. auditbeat ──────────────────────────────────────────────────────────
 
     - name: Развернуть auditbeat.yml
-      ansible.builtin.copy:
-        src: ../configs/auditbeat/auditbeat.yml
+      ansible.builtin.template:
+        src: ../configs/auditbeat/auditbeat.yml.j2
         dest: /etc/auditbeat/auditbeat.yml
         owner: root
         group: root
@@ -168,22 +168,9 @@
         mode: "0640"
       notify: restart auditbeat
 
-    - name: Создать keystore auditbeat
-      ansible.builtin.command:
-        cmd: auditbeat keystore create --force
-      changed_when: false
-
-    - name: Записать LOGSTASH_HOST в keystore auditbeat
-      ansible.builtin.shell:
-        cmd: printf '%s' "{{ logstash_host }}:5044" | auditbeat keystore add LOGSTASH_HOST --stdin --force
-      changed_when: true
-      no_log: true
-
     - name: Валидировать конфиг auditbeat
       ansible.builtin.command:
         cmd: auditbeat test config
-      environment:
-        LOGSTASH_HOST: "{{ logstash_host }}:5044"
       changed_when: false
 
     - name: Включить и запустить auditbeat
@@ -195,24 +182,13 @@
     # ── 5. filebeat ───────────────────────────────────────────────────────────
 
     - name: Развернуть filebeat.yml
-      ansible.builtin.copy:
-        src: ../configs/filebeat/filebeat.yml
+      ansible.builtin.template:
+        src: ../configs/filebeat/filebeat.yml.j2
         dest: /etc/filebeat/filebeat.yml
         owner: root
         group: root
         mode: "0640"
       notify: restart filebeat
-
-    - name: Создать keystore filebeat
-      ansible.builtin.command:
-        cmd: filebeat keystore create --force
-      changed_when: false
-
-    - name: Записать LOGSTASH_HOST в keystore filebeat
-      ansible.builtin.shell:
-        cmd: printf '%s' "{{ logstash_host }}:5044" | filebeat keystore add LOGSTASH_HOST --stdin --force
-      changed_when: true
-      no_log: true
 
     - name: Добавить filebeat в группу adm (доступ к /var/log/auth.log)
       ansible.builtin.user:
@@ -233,8 +209,6 @@
     - name: Валидировать конфиг filebeat
       ansible.builtin.command:
         cmd: filebeat test config
-      environment:
-        LOGSTASH_HOST: "{{ logstash_host }}:5044"
       changed_when: false
 
     - name: Включить и запустить filebeat

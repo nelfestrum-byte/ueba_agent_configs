@@ -8,10 +8,6 @@
 #   - auditd демон остановлен и отключён: systemctl stop auditd && systemctl disable auditd
 #   - auditbeat работает от root (нужен CAP_AUDIT_CONTROL для netlink)
 #
-# Keystore (LOGSTASH_HOST):
-#   auditbeat keystore create
-#   echo "logstash.internal:5044" | auditbeat keystore add LOGSTASH_HOST --stdin
-#
 # Проверка:
 #   auditbeat test config -c /etc/auditbeat/auditbeat.yml
 #   auditbeat test output
@@ -59,7 +55,7 @@ processors:
 
 # ── Выход → Logstash beats input ─────────────────────────────────────────────
 output.logstash:
-  hosts: ["${LOGSTASH_HOST}:5044"]
+  hosts: ["{{ logstash_host }}:5044"]
   # tls:
   #   certificate_authorities: ["/etc/auditbeat/opensearch-ca.pem"]
 
