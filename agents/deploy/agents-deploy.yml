@@ -1,24 +1,25 @@
 ---
-# Развертывание UEBA-агентов: auditbeat + filebeat + osquery (Debian/Ubuntu)
+# Развертывание UEBA-агентов: auditd + fluent-bit + filebeat + osquery (Debian/Ubuntu)
 #
-# Стек:
-#   auditbeat — заменяет auditd демон; управляет аудитом ядра через netlink
-#   filebeat  — читает osquery results.log + /var/log/auth.log (sshd)
-#   osquery   — остаётся как источник данных для filebeat
+# Стек сбора audit-событий:
+#   auditd     — ядровый аудит (execve, sudo, auth, file_integrity)
+#   fluent-bit — читает /var/log/audit/audit.log, объединяет события по serial
+#                через Lua-скрипты, обогащает ECS-полями → Logstash TCP 5045
+#                → OpenSearch индекс fluent-audit-YYYY.MM.dd
 #
-# Устаревшие пакеты (удалить вручную перед первым деплоем):
-#   systemctl stop auditd fluent-bit && systemctl disable auditd fluent-bit
-#   apt remove --purge auditd audispd-plugins fluent-bit -y
-#   rm -rf /etc/audit /etc/fluent-bit /etc/default/fluent-bit
-#   rm -rf /var/lib/fluent-bit /etc/systemd/system/fluent-bit.service.d
-#   systemctl daemon-reload
+# Стек сбора osquery-событий (не изменяется):
+#   osquery    — diff-мониторинг: процессы, соединения, пользователи, сервисы
+#   filebeat   — читает osquery results.log → Logstash beats 5044
+#
+# ВАЖНО: auditbeat и auditd не могут работать одновременно (конфликт за
+#        audit netlink-сокет). Плейбук останавливает и отключает auditbeat.
 #
 # Использование:
 #   cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 #
 # Переменные: см. group_vars/all.yml (скопировать из all.yml.example)
 
-- name: Deploy UEBA agents (auditbeat + filebeat + osquery)
+- name: Deploy UEBA agents (auditd + fluent-bit + filebeat + osquery)
   hosts: ueba_agents
   become: true
   gather_facts: true
@@ -43,20 +44,22 @@
         group: root
         mode: "0755"
       loop:
-        - /etc/auditbeat/rules.d
+        - /etc/audit/rules.d
+        - /etc/fluent-bit/scripts
         - /etc/filebeat
         - /etc/osquery
         - /var/log/osquery
+        - /var/lib/fluent-bit/storage
         - /usr/share/keyrings
 
   tasks:
 
     # ── 1. Остановить конфликтующие сервисы ───────────────────────────────────
-    # auditd и auditbeat не могут одновременно владеть audit netlink-сокетом.
+    # auditbeat и auditd не могут одновременно владеть audit netlink-сокетом.
 
-    - name: Остановить auditd (конфликт с auditbeat за audit netlink)
+    - name: Остановить и отключить auditbeat (конфликт с auditd)
       ansible.builtin.systemd:
-        name: auditd
+        name: auditbeat
         state: stopped
         enabled: false
       failed_when: false
@@ -99,10 +102,11 @@
     # ── 3. Установка пакетов ───────────────────────────────────────────────────
 
     # -- Онлайн: всё из подключённых репозиториев
-    - name: Установить auditbeat, filebeat, osquery, acl (онлайн)
+    - name: Установить auditd, filebeat, osquery, acl (онлайн)
       ansible.builtin.apt:
         name:
-          - auditbeat
+          - auditd
+          - audispd-plugins
           - filebeat
           - osquery
           - acl
@@ -110,10 +114,13 @@
         update_cache: true
       when: not (use_local_packages | default(false))
 
-    # -- Офлайн: acl из Debian-репо, остальное из локальных .deb
-    - name: Установить acl из системного репозитория (офлайн)
+    # -- Офлайн: acl + auditd из Debian-репо, остальное из локальных .deb
+    - name: Установить auditd, audispd-plugins, acl из системного репозитория (офлайн)
       ansible.builtin.apt:
-        name: acl
+        name:
+          - auditd
+          - audispd-plugins
+          - acl
         state: latest
         update_cache: true
       when: use_local_packages | default(false)
@@ -124,16 +131,16 @@
         dest: "/tmp/{{ item }}"
         mode: "0644"
       loop:
-        - "{{ auditbeat_local_deb }}"
+        - "{{ fluent_bit_local_deb }}"
         - "{{ filebeat_local_deb }}"
         - "{{ osquery_local_deb }}"
       when: use_local_packages | default(false)
 
-    - name: Установить auditbeat, filebeat, osquery из локальных .deb
+    - name: Установить fluent-bit, filebeat, osquery из локальных .deb
       ansible.builtin.apt:
         deb: "/tmp/{{ item }}"
       loop:
-        - "{{ auditbeat_local_deb }}"
+        - "{{ fluent_bit_local_deb }}"
         - "{{ filebeat_local_deb }}"
         - "{{ osquery_local_deb }}"
       when: use_local_packages | default(false)
@@ -143,43 +150,120 @@
         path: "/tmp/{{ item }}"
         state: absent
       loop:
-        - "{{ auditbeat_local_deb }}"
+        - "{{ fluent_bit_local_deb }}"
         - "{{ filebeat_local_deb }}"
         - "{{ osquery_local_deb }}"
       when: use_local_packages | default(false)
 
-    # ── 4. auditbeat ──────────────────────────────────────────────────────────
+    # ── 4. auditd — конфигурация ───────────────────────────────────────────────
 
-    - name: Развернуть auditbeat.yml
-      ansible.builtin.template:
-        src: ../configs/auditbeat/auditbeat.yml.j2
-        dest: /etc/auditbeat/auditbeat.yml
-        owner: root
-        group: root
-        mode: "0600"
-      notify: restart auditbeat
+    - name: Настроить auditd.conf (EOE-записи, enriched format, log_group)
+      ansible.builtin.lineinfile:
+        path: /etc/audit/auditd.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: true
+      loop:
+        - { regexp: '^end_of_event_timeout\s*=', line: 'end_of_event_timeout = 2' }
+        - { regexp: '^log_format\s*=',           line: 'log_format = ENRICHED' }
+        - { regexp: '^log_group\s*=',            line: 'log_group = adm' }
+        - { regexp: '^max_log_file\s*=',         line: 'max_log_file = 100' }
+        - { regexp: '^max_log_file_action\s*=',  line: 'max_log_file_action = ROTATE' }
+        - { regexp: '^num_logs\s*=',             line: 'num_logs = 5' }
+        - { regexp: '^flush\s*=',                line: 'flush = INCREMENTAL_ASYNC' }
+      notify: restart auditd
 
     - name: Развернуть правила аудита
       ansible.builtin.copy:
-        src: ../configs/auditbeat/rules.d/ueba.conf
-        dest: /etc/auditbeat/rules.d/ueba.conf
+        src: ../configs/auditd/audit.rules
+        dest: /etc/audit/rules.d/ueba.rules
         owner: root
         group: root
         mode: "0640"
-      notify: restart auditbeat
+      notify: reload auditd rules
 
-    - name: Валидировать конфиг auditbeat
+    - name: Загрузить правила auditd через augenrules
       ansible.builtin.command:
-        cmd: auditbeat test config
+        cmd: augenrules --load
       changed_when: false
+      notify: restart auditd
 
-    - name: Включить и запустить auditbeat
+    - name: Включить и запустить auditd
       ansible.builtin.systemd:
-        name: auditbeat
+        name: auditd
         enabled: true
         state: started
 
-    # ── 5. filebeat ───────────────────────────────────────────────────────────
+    # ── 5. fluent-bit — конфигурация ──────────────────────────────────────────
+
+    - name: Развернуть fluent-bit.conf
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/fluent-bit.conf
+        dest: /etc/fluent-bit/fluent-bit.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fluent-bit
+
+    - name: Развернуть parsers.conf
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/parsers.conf
+        dest: /etc/fluent-bit/parsers.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fluent-bit
+
+    - name: Развернуть Lua-скрипт auditd_merge.lua
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/auditd_merge.lua
+        dest: /etc/fluent-bit/scripts/auditd_merge.lua
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fluent-bit
+
+    - name: Развернуть Lua-скрипт auditd_enrich.lua
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/auditd_enrich.lua
+        dest: /etc/fluent-bit/scripts/auditd_enrich.lua
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fluent-bit
+
+    - name: Создать /etc/default/fluent-bit с переменными окружения
+      ansible.builtin.template:
+        src: ../configs/fluent-bit/fluent-bit.env.j2
+        dest: /etc/default/fluent-bit
+        owner: root
+        group: root
+        mode: "0640"
+      notify: restart fluent-bit
+
+    - name: Добавить fluent-bit в группу adm (чтение /var/log/audit/audit.log)
+      ansible.builtin.user:
+        name: fluent-bit
+        groups: adm
+        append: true
+      notify: restart fluent-bit
+
+    - name: Настроить ACL на каталог /var/log/audit для fluent-bit
+      ansible.builtin.shell:
+        cmd: |
+          setfacl -m u:fluent-bit:rx /var/log/audit
+          setfacl -m d:u:fluent-bit:r /var/log/audit
+          [ -f /var/log/audit/audit.log ] && \
+            setfacl -m u:fluent-bit:r /var/log/audit/audit.log || true
+      changed_when: false
+
+    - name: Включить и запустить fluent-bit
+      ansible.builtin.systemd:
+        name: fluent-bit
+        enabled: true
+        state: started
+
+    # ── 6. filebeat ───────────────────────────────────────────────────────────
 
     - name: Развернуть filebeat.yml
       ansible.builtin.template:
@@ -217,7 +301,7 @@
         enabled: true
         state: started
 
-    # ── 6. osquery ─────────────────────────────────────────────────────────────
+    # ── 7. osquery ─────────────────────────────────────────────────────────────
 
     - name: Развернуть конфиг osquery
       ansible.builtin.copy:
@@ -247,9 +331,19 @@
   # ── Handlers ──────────────────────────────────────────────────────────────────
 
   handlers:
-    - name: restart auditbeat
+    - name: restart auditd
       ansible.builtin.systemd:
-        name: auditbeat
+        name: auditd
+        state: restarted
+
+    - name: reload auditd rules
+      ansible.builtin.command:
+        cmd: augenrules --load
+      changed_when: false
+
+    - name: restart fluent-bit
+      ansible.builtin.systemd:
+        name: fluent-bit
         state: restarted
 
     - name: restart filebeat

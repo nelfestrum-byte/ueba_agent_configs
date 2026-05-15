@@ -1,5 +1,6 @@
 ## /etc/audit/rules.d/ueba.rules
 ## Правила auditd для UEBA (production, bare-metal Debian)
+## Стек: auditd → fluent-bit (merge+enrich Lua) → Logstash → OpenSearch (fluent-audit-*)
 ##
 ## Установка:
 ##   1. Скопировать файл в /etc/audit/rules.d/ueba.rules
@@ -9,13 +10,14 @@
 ##   3. systemctl enable --now auditd
 ##   4. auditctl -s                # проверить enabled=1, backlog, lost
 ##
+## /etc/audit/auditd.conf — обязательные настройки для fluent-bit merge-скрипта:
+##   end_of_event_timeout = 2   (генерирует EOE-записи — маркер конца набора)
+##   log_format = ENRICHED      (обогащённый формат с именами пользователей)
+##   log_group = adm            (fluent-bit читает через группу adm)
+##
 ## Доступ к /var/log/audit/audit.log для fluent-bit:
-##   - В Debian каталог /var/log/audit принадлежит root:root, права 0750.
-##   - Простой вариант: `chgrp adm /var/log/audit /var/log/audit/audit.log` и
-##     закрепить через `log_group = adm` в /etc/audit/auditd.conf
-##     (после смены — `systemctl restart auditd`).
-##   - Затем добавить пользователя fluent-bit в группу adm:
-##     `usermod -aG adm fluent-bit`.
+##   usermod -aG adm fluent-bit && systemctl restart auditd
+##   или: setfacl -m u:fluent-bit:r /var/log/audit/audit.log
 
 # Очистить ранее загруженные правила (на старте — обязательная директива)
 -D
@@ -32,6 +34,11 @@
 
 # Максимальное время ожидания при backlog full (мс) — даёт ядру шанс не терять события
 --backlog_wait_time 60000
+
+# ── Фильтры высокочастотных шумовых системных вызовов ────────────────────────
+-a never,exit -F arch=b64 -S epoll_wait -S epoll_pwait
+-a never,exit -F arch=b64 -S getpid -S gettid -S clock_gettime
+-a never,exit -F arch=b64 -S recvmsg -F uid=root
 
 # ── Запуск процессов (execve) ────────────────────────────────────────────────
 -a always,exit -F arch=b64 -S execve -k process_start
@@ -71,11 +78,13 @@
 -w /usr/lib/systemd/system/ -p wa -k systemd_changes
 
 # ── Сетевые системные вызовы ─────────────────────────────────────────────────
--a always,exit -F arch=b64 -S socket -F a0=2  -k socket_create
--a always,exit -F arch=b64 -S socket -F a0=10 -k socket_create
--a always,exit -F arch=b64 -S bind   -k socket_bind
--a always,exit -F arch=b64 -S listen -k socket_listen
+-a always,exit -F arch=b64 -S socket  -F a0=2  -k socket_create
+-a always,exit -F arch=b64 -S socket  -F a0=10 -k socket_create
+-a always,exit -F arch=b64 -S bind    -k socket_bind
+-a always,exit -F arch=b64 -S listen  -k socket_listen
 -a always,exit -F arch=b64 -S connect -k socket_connect
+-a always,exit -F arch=b64 -S accept  -k network_accept
+-a always,exit -F arch=b64 -S accept4 -k network_accept
 
 # ── Модули ядра ──────────────────────────────────────────────────────────────
 -a always,exit -F arch=b64 -S init_module,finit_module -k module_load
@@ -93,6 +102,7 @@
 -a always,exit -F arch=b64 -S setgid    -k privilege_change
 -a always,exit -F arch=b64 -S setresuid -k privilege_change
 -a always,exit -F arch=b64 -S setresgid -k privilege_change
+-a always,exit -F arch=b64 -S capset    -k privilege_change
 
 # ── Выполнение sudo / su (privilege escalation via execve) ───────────────────
 -a always,exit -F arch=b64 -S execve -F path=/usr/bin/sudo -k sudo_exec
@@ -101,6 +111,26 @@
 # ── Изменение времени системы (anti-tampering) ───────────────────────────────
 -a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime -k time_change
 -w /etc/localtime -p wa -k time_change
+
+# ── Изменения в бинарниках системных директорий ──────────────────────────────
+-a always,exit -F arch=b64 -S rename -S renameat -S renameat2 -F dir=/usr/bin  -k binary_modification
+-a always,exit -F arch=b64 -S rename -S renameat -S renameat2 -F dir=/usr/sbin -k binary_modification
+-a always,exit -F arch=b64 -S rename -S renameat -S renameat2 -F dir=/bin      -k binary_modification
+
+# ── Вход/выход пользователей и сессии ───────────────────────────────────────
+-w /var/log/faillog  -p wa -k login_failure
+-w /var/log/lastlog  -p wa -k login_tracking
+-w /var/run/utmp     -p wa -k session_tracking
+-w /var/log/wtmp     -p wa -k session_tracking
+-w /var/log/btmp     -p wa -k session_tracking
+
+# ── Аудит конфигурации auditd ────────────────────────────────────────────────
+-w /etc/audit/   -p wa -k audit_config_change
+-w /etc/audisp/  -p wa -k audit_config_change
+
+# ── Подозрительные действия: запись и исполнение из /tmp и /dev/shm ──────────
+-a always,exit -F arch=b64 -S openat -F dir=/tmp     -F success=1 -k tmp_write
+-a always,exit -F arch=b64 -S openat -F dir=/dev/shm -F success=1 -k tmp_write
 
 # ── Иммутабельный режим (раскомментировать после стабилизации правил) ────────
 ## После -e 2 правила нельзя изменить до перезагрузки. Это рекомендуется в проде,

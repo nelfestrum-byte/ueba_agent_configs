@@ -11,11 +11,12 @@
 
 | Сервис | Роль |
 |--------|------|
-| **auditbeat** | Заменяет auditd; читает kernel audit через netlink (execve, sudo, auth, file_integrity) |
-| **filebeat** | Читает osquery results.log (osquery module) + /var/log/auth.log (system/auth module) |
+| **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
+| **fluent-bit** | Читает audit.log; объединяет события по serial (Lua merge), обогащает ECS-полями (Lua enrich) → Logstash TCP 5045 → `fluent-audit-*` |
+| **filebeat** | Читает osquery results.log → Logstash beats 5044 → `filebeat-*` |
 | **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи |
 
-Beats отдают нативный ECS — Logstash не мутирует их поля, только маршрутизирует в стандартные индексы.
+**auditbeat** остановлен/отключён — конфликтует с auditd за audit netlink-сокет.
 
 ## Структура проекта
 
@@ -40,15 +41,21 @@ ueba-stand/
 │
 ├── agents/
 │   ├── configs/
-│   │   ├── auditbeat/
-│   │   │   ├── auditbeat.yml.j2         — конфиг auditbeat (Ansible template)
-│   │   │   └── rules.d/ueba.conf        — правила аудита ядра
+│   │   ├── auditd/
+│   │   │   └── audit.rules              — правила auditd для UEBA (execve, network, identity...)
+│   │   ├── fluent-bit/
+│   │   │   ├── fluent-bit.conf          — главный конфиг fluent-bit (auditd pipeline)
+│   │   │   ├── parsers.conf             — парсеры auditd строк
+│   │   │   ├── fluent-bit.env.j2        — Ansible template: /etc/default/fluent-bit
+│   │   │   └── scripts/
+│   │   │       ├── auditd_merge.lua     — объединение событий по serial number
+│   │   │       └── auditd_enrich.lua    — обогащение в ECS + MITRE ATT&CK теги
 │   │   ├── filebeat/
 │   │   │   └── filebeat.yml.j2          — конфиг filebeat (Ansible template)
 │   │   └── osquery/osquery.conf         — diff-запросы (без count/snapshot метрик)
 │   └── deploy/
-│       ├── agents-deploy.yml            — Ansible плейбук (apt/deb + конфиги)
-│       ├── agents-deploy-legacy.yml     — старый плейбук (auditd + fluent-bit)
+│       ├── agents-deploy.yml            — Ansible плейбук (auditd + fluent-bit + filebeat + osquery)
+│       ├── agents-deploy-legacy.yml     — архив старого плейбука
 │       ├── ansible.cfg
 │       ├── inventory.ini
 │       ├── group_vars/all.yml           — logstash_host, версии пакетов
@@ -74,15 +81,17 @@ ueba-stand/
 
 | Тема | Файлы | Назначение |
 |------|-------|-----------|
-| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats relay + Suricata/Windows normalization |
+| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats 5044 + fluent-bit TCP 5045 + Suricata/Windows |
 | **Конфиги Logstash** | `logstash/configs/logstash.yml`, `pipelines.yml` | Настройки рантайма |
 | **Деплой Logstash** | `logstash/deploy/logstash-deploy.yml` | Ansible: docker pull + copy + up |
 | **Переменные Logstash** | `logstash/deploy/group_vars/all.yml` | opensearch_url, SSL, image, bind_addr |
-| **Конфиг auditbeat** | `agents/configs/auditbeat/auditbeat.yml.j2` | auditd module + file_integrity module |
-| **Правила аудита** | `agents/configs/auditbeat/rules.d/ueba.conf` | execve, sudo, PAM, SSH, cron, модули |
+| **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch |
+| **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd pipeline: tail → merge → enrich → TCP 5045 |
+| **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
+| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение + MITRE ATT&CK теги |
 | **Конфиг filebeat** | `agents/configs/filebeat/filebeat.yml.j2` | osquery module + system/auth module |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
-| **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: deb install + шаблоны + ACL |
+| **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + filebeat + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb |
 | **Dev-стенд** | `dev_stand/docker-compose.yml` | Локальный прогон без агентов |
 
@@ -90,8 +99,8 @@ ueba-stand/
 
 | Индекс | Источник |
 |--------|---------|
-| `auditbeat-{version}-YYYY.MM.dd` | auditbeat: execve, sudo, auth, file changes |
-| `filebeat-{version}-YYYY.MM.dd` | filebeat: osquery diff + sshd auth.log |
+| `fluent-audit-YYYY.MM.dd` | fluent-bit: auditd ECS-события (execve, sudo, auth, network, file) — TCP 5045 |
+| `filebeat-{version}-YYYY.MM.dd` | filebeat: osquery diff + sshd auth.log — beats 5044 |
 | `suricata-YYYY.MM.dd` | Suricata eve.json (TCP 5049) |
 | `winevtlog-YYYY.MM.dd` | Windows winevtlog (TCP 5046, stub) |
 
