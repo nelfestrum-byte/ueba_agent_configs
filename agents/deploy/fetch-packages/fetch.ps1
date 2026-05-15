@@ -1,13 +1,15 @@
-# Fetch osquery + fluent-bit .deb via Docker, place into agents/deploy/files/
+# Скачать auditbeat + filebeat + osquery .deb через Docker
+# Результат кладётся в agents/deploy/files/
 #
-# Usage:
-#   .\fetch.ps1                    # Debian trixie (default)
-#   .\fetch.ps1 -FbDist bookworm   # fluent-bit from bookworm if trixie unavailable
+# Использование:
+#   .\fetch.ps1                                             # версии по умолчанию
+#   .\fetch.ps1 -ElasticVersion 9.4.1 -OsqueryVersion 5.23.0
 #
-# Requirements: Docker Desktop running
+# Требования: Docker Desktop запущен
 
 param(
-    [string]$FbDist = "trixie"
+    [string]$ElasticVersion = "9.4.1",
+    [string]$OsqueryVersion = "5.23.0"
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -22,8 +24,11 @@ if (-not (Test-Path $FilesDir)) {
     New-Item -ItemType Directory -Force $FilesDir | Out-Null
 }
 
-Write-Host "[1/3] Building image (FB_DIST=$FbDist)..."
-docker build --build-arg "FB_DIST=$FbDist" -t $ImageName $FetchDir
+Write-Host "[1/3] Building image (ELASTIC_VERSION=$ElasticVersion OSQUERY_VERSION=$OsqueryVersion)..."
+docker build `
+    --build-arg "ELASTIC_VERSION=$ElasticVersion" `
+    --build-arg "OSQUERY_VERSION=$OsqueryVersion" `
+    -t $ImageName $FetchDir
 if ($LASTEXITCODE -ne 0) { throw "docker build failed (exit $LASTEXITCODE)" }
 
 Write-Host "[2/3] Extracting .deb files to: $FilesDir"
@@ -32,7 +37,6 @@ if ($LASTEXITCODE -ne 0) { throw "docker create failed (exit $LASTEXITCODE)" }
 Write-Host "      container: $ContainerId"
 
 try {
-    # /packages/. copies directory CONTENTS (not the dir itself)
     docker cp "${ContainerId}:/packages/." $FilesDir
     if ($LASTEXITCODE -ne 0) { throw "docker cp failed (exit $LASTEXITCODE)" }
 } finally {
@@ -48,9 +52,17 @@ if (-not $Debs) {
 }
 $Debs | Format-Table Name, @{Label="MB"; Expression={ [math]::Round($_.Length/1MB, 1) }}
 
-Write-Host "Set in agents/deploy/group_vars/all.yml:"
+Write-Host ""
+Write-Host "Пропишите в agents/deploy/group_vars/all.yml:"
 Write-Host "  use_local_packages: true"
+Write-Host "  elastic_version: `"$ElasticVersion`""
+Write-Host "  osquery_version: `"$OsqueryVersion`""
+
 foreach ($f in $Debs) {
-    if ($f.Name -like "osquery*")    { Write-Host "  osquery_local_deb: `"$($f.Name)`"" }
-    if ($f.Name -like "fluent-bit*") { Write-Host "  fluent_bit_local_deb: `"$($f.Name)`"" }
+    if ($f.Name -match "^auditbeat-(.+)-(amd64|arm64)\.deb$") {
+        Write-Host "  auditbeat_arch: `"$($Matches[2])`""
+    }
+    if ($f.Name -match "^filebeat-(.+)-(amd64|arm64)\.deb$") {
+        Write-Host "  filebeat_arch: `"$($Matches[2])`""
+    }
 }

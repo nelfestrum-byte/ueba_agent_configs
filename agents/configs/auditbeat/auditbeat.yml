@@ -1,0 +1,78 @@
+# /etc/auditbeat/auditbeat.yml
+#
+# Установка (Debian/Ubuntu):
+#   apt install auditbeat          # из elastic apt-репозитория
+#   systemctl enable --now auditbeat
+#
+# Требования:
+#   - auditd демон остановлен и отключён: systemctl stop auditd && systemctl disable auditd
+#   - auditbeat работает от root (нужен CAP_AUDIT_CONTROL для netlink)
+#
+# Keystore (LOGSTASH_HOST):
+#   auditbeat keystore create
+#   echo "logstash.internal:5044" | auditbeat keystore add LOGSTASH_HOST --stdin
+#
+# Проверка:
+#   auditbeat test config -c /etc/auditbeat/auditbeat.yml
+#   auditbeat test output
+
+auditbeat.modules:
+
+  # ── auditd — события ядра через audit netlink ──────────────────────────────
+  - module: auditd
+    resolve_ids: true        # UID/GID → имена пользователей/групп
+    failure_mode: log        # при ошибке netlink писать в лог (не паниковать)
+    backlog_limit: 16384     # буфер ядра, держит всплески execve
+    rate_limit: 1000         # событий/сек — защита от DoS
+    include_raw_message: false
+    include_warnings: false
+    audit_rule_files:
+      - /etc/auditbeat/rules.d/*.conf
+
+  # ── file_integrity — хэши и метаданные критичных файлов ───────────────────
+  # Дополняет auditd: те же пути, но добавляет sha256 и тип изменения.
+  # Использует inotify — события real-time, не polling.
+  - module: file_integrity
+    paths:
+      - /etc/passwd
+      - /etc/shadow
+      - /etc/group
+      - /etc/gshadow
+      - /etc/sudoers
+      - /etc/sudoers.d
+      - /etc/ssh/sshd_config
+      - /etc/pam.d
+      - /etc/security
+      - /etc/systemd/system
+      - /etc/cron.d
+      - /etc/crontab
+      - /var/spool/cron/crontabs
+    scan_at_start: true
+    scan_rate_per_sec: 50 MiB
+    max_file_size: 100 MiB
+    hash_types: [sha256]
+
+# ── Обогащение событий ────────────────────────────────────────────────────────
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+
+# ── Выход → Logstash beats input ─────────────────────────────────────────────
+output.logstash:
+  hosts: ["${LOGSTASH_HOST}:5044"]
+  # tls:
+  #   certificate_authorities: ["/etc/auditbeat/opensearch-ca.pem"]
+
+# ── Управление индексами/шаблонами ────────────────────────────────────────────
+# Отключено: шаблоны и ILM управляются вручную в OpenSearch.
+setup.template.enabled: false
+setup.ilm.enabled: false
+
+# ── Логирование самого auditbeat ──────────────────────────────────────────────
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/auditbeat
+  name: auditbeat
+  keepfiles: 7
+  permissions: 0640
