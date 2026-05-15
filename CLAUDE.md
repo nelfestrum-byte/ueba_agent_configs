@@ -186,6 +186,20 @@ systemctl status auditbeat filebeat osqueryd
 auditbeat test output && filebeat test output
 ```
 
+## Известные особенности и грабли
+
+### auditd 4.x — нет type=EOE в audit.log
+auditd **4.0+** не пишет `type=EOE` в `/var/log/audit/audit.log` — в 4.x EOE обрабатывается внутри dispatcher-плагинов и в лог не попадает. `end_of_event_timeout = 2` в `auditd.conf` **не исправляет** это поведение.
+
+**Следствие**: `auditd_merge.lua` НЕ должен полагаться на EOE как единственный триггер флаша. Скрипт флашит по timeout (wall clock, `os.time()`): после TIMEOUT секунд без новых записей для данного serial — запись уходит в поток. EOE-ветка оставлена для совместимости с auditd < 4.0.
+
+**Диагностика fluent-bit**: если `filter.lua.0.add_records = 0` при ненулевом `input.tail.0.records` — merge-скрипт не флашит. Проверить:
+```bash
+curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
+```
+
+---
+
 ## Что НЕ читать
 
 - `.git/` — используйте `git log` вместо чтения объектов
