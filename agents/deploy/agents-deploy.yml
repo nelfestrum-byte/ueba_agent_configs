@@ -199,7 +199,7 @@
         src: ../configs/filebeat/filebeat.yml
         dest: /etc/filebeat/filebeat.yml
         owner: root
-        group: filebeat
+        group: root
         mode: "0640"
       notify: restart filebeat
 
