@@ -7,24 +7,15 @@
 # Права доступа к файлам:
 #   /var/log/auth.log   → filebeat должен быть в группе adm:
 #                         usermod -aG adm filebeat
-#   /var/log/osquery/   → osquery пишет root:root, открыть через ACL:
-#                         setfacl -m u:filebeat:r /var/log/osquery/osqueryd.results.log
-#                         (повторять после logrotate — добавить в postrotate)
 #
 # Проверка:
 #   filebeat test config -c /etc/filebeat/filebeat.yml
 #   filebeat test output
+#
+# Примечание: osquery больше не читается filebeat.
+#   osqueryd.results.log → fluent-bit (osquery_enrich.lua) → TCP 5047 → fluent-osquery-*
 
 filebeat.modules:
-
-  # ── osquery — diff события из results log ────────────────────────────────────
-  # Читает osqueryd.results.log (log_result_events=true в osquery.conf →
-  # одна строка = одно изменение строки таблицы).
-  # Snapshot log не читаем: осquery snapshot метрики выведены из схемы.
-  - module: osquery
-    result:
-      enabled: true
-      var.paths: ["/var/log/osquery/osqueryd.results.log"]
 
   # ── system/auth — SSH аутентификация ─────────────────────────────────────────
   # На Debian с rsyslog sshd пишет в /var/log/auth.log (стандарт).
@@ -38,12 +29,6 @@ filebeat.modules:
 
 # Если на хосте нет rsyslog (pure journald) и /var/log/auth.log отсутствует —
 # заменить system/auth выше на journald input:
-#
-# filebeat.modules:
-#   - module: osquery
-#     result:
-#       enabled: true
-#       var.paths: ["/var/log/osquery/osqueryd.results.log"]
 #
 # filebeat.inputs:
 #   - type: journald

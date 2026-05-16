@@ -1,6 +1,8 @@
 # CLAUDE.md — UEBA проект
 Мы разрабатываем конфигурации источников для сбора данных.
 Данные будут использоваться для UEBA системы на основе скоринга.
+Собираемые данные должны поступать нормализованными по ECS 8.x.
+Главный приоритет - сохранение совместимости с оригинальным Elastic.
 
 **Цели:** 
 1. Минимизировать потребление токенов через оптимизированную навигацию по проекту и точные инструкции.
@@ -12,8 +14,8 @@
 | Сервис | Роль |
 |--------|------|
 | **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
-| **fluent-bit** | Читает audit.log; объединяет события по serial (Lua merge), обогащает ECS-полями (Lua enrich) → Logstash TCP 5045 → `fluent-audit-*` |
-| **filebeat** | Читает osquery results.log → Logstash beats 5044 → `filebeat-*` |
+| **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*` |
+| **filebeat** | Читает /var/log/auth.log (SSH auth) → Logstash beats 5044 → `filebeat-*` |
 | **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи |
 
 **auditbeat** остановлен/отключён — конфликтует с auditd за audit netlink-сокет.
@@ -89,7 +91,8 @@ ueba-stand/
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd pipeline: tail → merge → enrich → TCP 5045 |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение + MITRE ATT&CK теги |
-| **Конфиг filebeat** | `agents/configs/filebeat/filebeat.yml.j2` | osquery module + system/auth module |
+| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace |
+| **Конфиг filebeat** | `agents/configs/filebeat/filebeat.yml.j2` | только system/auth (SSH auth.log) |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + filebeat + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb |
@@ -100,7 +103,8 @@ ueba-stand/
 | Индекс | Источник |
 |--------|---------|
 | `fluent-audit-YYYY.MM.dd` | fluent-bit: auditd ECS-события (execve, sudo, auth, network, file) — TCP 5045 |
-| `filebeat-{version}-YYYY.MM.dd` | filebeat: osquery diff + sshd auth.log — beats 5044 |
+| `fluent-osquery-YYYY.MM.dd` | fluent-bit: osquery diff-события ECS + osquery.* namespace — TCP 5047 |
+| `filebeat-{version}-YYYY.MM.dd` | filebeat: SSH auth.log (system/auth module) — beats 5044 |
 | `suricata-YYYY.MM.dd` | Suricata eve.json (TCP 5049) |
 | `winevtlog-YYYY.MM.dd` | Windows winevtlog (TCP 5046, stub) |
 
