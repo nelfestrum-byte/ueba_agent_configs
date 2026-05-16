@@ -140,16 +140,26 @@ function enrich_ecs(tag, timestamp, record)
 
     -- ── Пользователь ──
     local uid = record["uid"]
-    if uid then record["user.id"] = uid end
+    if uid then
+        record["user.id"] = uid
+        -- uid_name: kernel-resolved username, сохранён merge-скриптом из UID="..." в raw-логе
+        if record["uid_name"] then record["user.name"] = record["uid_name"] end
+    end
 
     -- auid = audit user id (реальный пользователь до su/sudo)
     local auid = record["auid"]
     if auid and auid ~= "4294967295" and auid ~= "-1" then
         record["user.effective.id"] = auid
+        if record["auid_name"] then record["user.effective.name"] = record["auid_name"] end
     end
+
+    -- user_acct присутствует в USER_* событиях — перекрывает
     if record["user_acct"] then
         record["user.name"] = record["user_acct"]
     end
+
+    record["uid_name"]  = nil
+    record["auid_name"] = nil
 
     -- ── Syscall ──
     local sc_num  = record["syscall"]

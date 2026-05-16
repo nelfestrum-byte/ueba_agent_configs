@@ -82,6 +82,9 @@ local function merge_into_buf(serial, atype, msg, timestamp)
                              "comm","exe","key","tty"}) do
             if kv[f] then entry[f] = kv[f] end
         end
+        -- Kernel-resolved usernames (uppercase aliases appended by auditd)
+        if kv["UID"]  and kv["UID"]  ~= "unset" then entry["uid_name"]  = kv["UID"]  end
+        if kv["AUID"] and kv["AUID"] ~= "unset" then entry["auid_name"] = kv["AUID"] end
         entry["syscall_success"] = kv["success"]
         entry["syscall_exit"]    = kv["exit"]
 
