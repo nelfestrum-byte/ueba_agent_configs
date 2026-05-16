@@ -1,101 +1,124 @@
 # osquery diff trigger test
 
-Ansible-плейбук для ручного тестирования diff-событий osquery.  
-Создаёт (apply) и удаляет (rollback) тестовые артефакты — по одному на каждую мониторируемую таблицу osquery.
+Ansible-плейбук для ручного тестирования diff-событий osquery на удалённых хостах.  
+Создаёт (apply) и удаляет (rollback) тестовые артефакты — по одному на каждую мониторируемую таблицу.
+
+## Первый запуск — подготовка
+
+```bash
+cd tests/osquery
+
+# Скопировать и заполнить инвентори
+cp inventory.ini.example inventory.ini
+# Прописать IP/hostname хостов и ansible_user
+```
+
+Формат `inventory.ini`:
+
+```ini
+[ueba_agents]
+agent01  ansible_host=10.0.0.11
+agent02  ansible_host=10.0.0.12
+
+[ueba_agents:vars]
+ansible_user=deploy
+ansible_become=true
+ansible_python_interpreter=/usr/bin/python3
+```
+
+> `inventory.ini` добавлен в `.gitignore` — в репозиторий не попадает.
+
+---
 
 ## Запуск
 
-### Локально (на машине с osquery)
-
 ```bash
 cd tests/osquery
 
-# Применить — создать артефакты
+# Применить — создать артефакты на всех хостах
 ansible-playbook osquery-trigger.yml -e mode=apply --ask-become-pass
 
-# Откатить — удалить артефакты
+# Только на одном хосте
+ansible-playbook osquery-trigger.yml -e mode=apply --limit agent01 --ask-become-pass
+
+# Откатить — удалить все артефакты
 ansible-playbook osquery-trigger.yml -e mode=rollback --ask-become-pass
 ```
 
-### Удалённый хост
+---
+
+## Проверка результата
+
+Дождаться истечения самого долгого интервала из тестируемых таблиц — **300s** (`startup_items`, `iptables`).
 
 ```bash
-cd tests/osquery
+# SSH на целевой хост, затем:
 
-ansible-playbook osquery-trigger.yml \
-  -i ../../agents/deploy/inventory.ini \
-  -e mode=apply \
-  --ask-become-pass
-```
-
-### Проверка результата
-
-```bash
-# Ждать max 300s (интервал самой медленной таблицы: startup_items, iptables)
-# Затем смотреть diff-события:
+# Все diff-события теста
 sudo grep osq-test /var/log/osquery/osqueryd.results.log
 
-# Удобочитаемый вывод:
+# Читаемый вывод
 sudo grep osq-test /var/log/osquery/osqueryd.results.log | python3 -m json.tool
 
-# В реальном времени (во время apply/rollback):
+# В реальном времени во время apply/rollback
 sudo tail -f /var/log/osquery/osqueryd.results.log
+
+# Быстрая проверка — только таблицы и action
+sudo grep osq-test /var/log/osquery/osqueryd.results.log \
+  | python3 -c "
+import sys, json
+for line in sys.stdin:
+    e = json.loads(line)
+    print(e['action'], e['name'], json.dumps(e.get('columns', {}), ensure_ascii=False))
+"
 ```
 
-Каждое событие имеет поле `"action": "added"` (apply) или `"action": "removed"` (rollback).
+Каждое событие содержит поле `"action": "added"` (apply) или `"action": "removed"` (rollback).
 
 ---
 
 ## Покрытие таблиц osquery.conf
 
-### Покрыто (13 / 23)
+### Покрыто — 13 / 23 таблиц
 
-| Таблица | Интервал | Артефакт |
-|---|---|---|
-| `processes` | 30s | `/tmp/osq-test-sleep infinity` (via systemd service) |
-| `logged_in_users` | 30s | — *не покрыта* |
-| `process_connections` | 30s | — *не покрыта* |
-| `usb_devices` | 30s | — *не покрыта* |
-| `listening_ports` | 60s | python3 TCP listener на порту 19876 |
-| `crontabs` | 60s | `/etc/cron.d/osq-test` |
-| `ssh_authorized_keys` | 60s | `~osq-test-user/.ssh/authorized_keys` |
-| `kernel_modules` | 60s | — *не покрыта* |
-| `services` | 60s | systemd unit `osq-test.service` |
-| `process_open_files` | 60s | — *не покрыта* |
-| `arp_cache` | 60s | — *не покрыта* |
-| `users` | 120s | пользователь `osq-test-user` |
-| `groups` | 120s | группа `osq-test-group` |
-| `user_groups` | 120s | `osq-test-user` → `osq-test-group` |
-| `sudoers` | 120s | `/etc/sudoers.d/osq-test` |
-| `routes` | 120s | — *не покрыта* |
-| `dns_resolvers` | 120s | — *не покрыта* |
-| `mounts` | 120s | bind-mount `/tmp` → `/mnt/osq-test-mount` |
-| `etc_hosts` | 120s | `198.51.100.1 osq-test.internal` |
-| `iptables` | 300s | `INPUT RETURN --comment osquery-test` |
-| `startup_items` | 300s | `/etc/init.d/osq-test` (LSB init script) |
-| `suid_bins` | 3600s | `/tmp/osq-test-sleep` с битом SUID (mode 4755) |
-| `pci_devices` | 300s | — *не покрыта* |
-| `certificates` | 3600s | — *не покрыта* |
+| Таблица | Интервал | Артефакт | Что проверяет |
+|---|---|---|---|
+| `processes` | 30s | `/tmp/osq-test-sleep infinity` (via systemd) | Процессы из нестандартных путей |
+| `listening_ports` | 60s | python3 TCP listener на порту 19876 | Новые прослушиваемые порты |
+| `crontabs` | 60s | `/etc/cron.d/osq-test` | Появление cron-заданий |
+| `ssh_authorized_keys` | 60s | `~osq-test-user/.ssh/authorized_keys` | Добавление SSH-ключей |
+| `services` | 60s | systemd unit `osq-test.service` | Новые/изменённые сервисы |
+| `users` | 120s | пользователь `osq-test-user` | Создание учётных записей |
+| `groups` | 120s | группа `osq-test-group` | Создание групп |
+| `user_groups` | 120s | `osq-test-user` → `osq-test-group` | Изменения в составе групп |
+| `sudoers` | 120s | `/etc/sudoers.d/osq-test` | Изменения прав sudo |
+| `etc_hosts` | 120s | `198.51.100.1 osq-test.internal` | Изменения `/etc/hosts` |
+| `mounts` | 120s | bind-mount `/tmp` → `/mnt/osq-test-mount` | Монтирование ФС |
+| `iptables` | 300s | `INPUT RETURN --comment osquery-test` | Изменения правил фаервола |
+| `startup_items` | 300s | `/etc/init.d/osq-test` (LSB init script) | Новые скрипты автозапуска |
+| `suid_bins` | 3600s | `/tmp/osq-test-sleep` mode 4755 | Появление SUID-бинарей |
 
-### Не покрыто (10 / 23) — причины
+### Не покрыто — 10 / 23 таблиц
 
 | Таблица | Причина |
 |---|---|
 | `logged_in_users` | Требует реального login-сеанса (utmp/wtmp) |
 | `process_connections` | Требует исходящего соединения во внешний IP |
-| `kernel_modules` | `modprobe` меняет состояние ядра, риск дестабилизации |
-| `process_open_files` | Определяется самими запущенными процессами, нестабильно |
+| `process_open_files` | Определяется процессами, нестабильный состав |
+| `kernel_modules` | `modprobe` меняет состояние ядра — риск |
 | `arp_cache` | Пассивная таблица ядра, заполняется трафиком |
-| `routes` | Требует реального сетевого интерфейса для dummy-маршрута |
-| `dns_resolvers` | Изменение `/etc/resolv.conf` ломает DNS |
+| `routes` | Требует реального интерфейса для тестового маршрута |
+| `dns_resolvers` | Изменение `/etc/resolv.conf` нарушает DNS на хосте |
 | `pci_devices` | Физическое железо |
-| `usb_devices` | Физическое железо, интервал 30s — слишком шумит |
-| `certificates` | Требует обновления системного CA store (`update-ca-certificates`) |
+| `usb_devices` | Физическое железо |
+| `certificates` | Требует обновления системного CA store |
 
 ---
 
 ## Идемпотентность
 
-- Повторный `mode=apply` ничего не сломает — Ansible-модули (`user`, `group`, `authorized_key`, `copy`, `lineinfile`) идемпотентны по природе.  
-- Shell-таски (листенер, mount, iptables) проверяют состояние перед действием (`mountpoint -q`, `iptables -C`, PID-файл).  
-- Повторный `mode=rollback` безопасен — `ignore_errors: true` там, где артефакт может уже отсутствовать.
+Плейбук безопасно запускать повторно в любом режиме:
+
+- Ansible-модули (`user`, `group`, `authorized_key`, `copy`, `lineinfile`) идемпотентны нативно.
+- Shell-таски проверяют состояние перед действием: `mountpoint -q`, `iptables -C`, PID-файл листенера.
+- `mode=rollback` с уже удалёнными артефактами завершается без ошибок (`ignore_errors: true` там, где объект может отсутствовать).

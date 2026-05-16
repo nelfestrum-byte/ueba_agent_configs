@@ -15,3 +15,6 @@ agents/deploy/group_vars/all.yml
 
 # Офлайн-пакеты (скачиваются через fetch-packages/fetch.ps1, в git не коммитятся)
 agents/deploy/files/*.deb
+
+# Тесты — рабочий инвентори создаётся из *.example
+tests/osquery/inventory.ini

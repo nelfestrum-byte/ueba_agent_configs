@@ -1,0 +1,9 @@
+[ueba_agents]
+# Хосты с установленным osquery (совпадают с agents/deploy/inventory.ini)
+# agent01  ansible_host=10.0.0.11
+# agent02  ansible_host=10.0.0.12
+
+[ueba_agents:vars]
+ansible_user=deploy
+ansible_become=true
+ansible_python_interpreter=/usr/bin/python3
