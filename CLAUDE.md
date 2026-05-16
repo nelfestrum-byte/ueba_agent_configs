@@ -15,10 +15,11 @@
 |--------|------|
 | **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
 | **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*` |
-| **filebeat** | Читает /var/log/auth.log (SSH auth) → Logstash beats 5044 → `filebeat-*` |
+| **filebeat** *(временный)* | Только /var/log/auth.log (SSH auth) → beats 5044 → `filebeat-*`. Будет заменён на fluent-bit pipeline. |
 | **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи |
 
 **auditbeat** остановлен/отключён — конфликтует с auditd за audit netlink-сокет.
+**filebeat** — временный компонент (только SSH auth.log). Переход на fluent-bit запланирован.
 
 ## Структура проекта
 
@@ -90,7 +91,7 @@ ueba-stand/
 | **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch |
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd pipeline: tail → merge → enrich → TCP 5045 |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
-| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение + MITRE ATT&CK теги |
+| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены — для scoring-надпроекта) |
 | **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace |
 | **Конфиг filebeat** | `agents/configs/filebeat/filebeat.yml.j2` | только system/auth (SSH auth.log) |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
@@ -139,7 +140,7 @@ ueba-stand/
 5. Прод: cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
-### Изменить конфиг агентов (auditbeat / filebeat / osquery)
+### Изменить конфиг агентов (auditd / fluent-bit / filebeat / osquery)
 ```
 1. Read agents/configs/<subsystem>/<file> целиком (все < 200 строк)
 2. Edit нужный блок
@@ -173,7 +174,7 @@ docker compose logs -f logstash
 docker compose restart logstash
 
 # Проверка индексов OpenSearch
-curl -s 'http://localhost:9200/_cat/indices?v&index=auditbeat-*,filebeat-*,suricata-*' | sort
+curl -s 'http://localhost:9200/_cat/indices?v&index=fluent-audit-*,fluent-osquery-*,filebeat-*' | sort
 
 # Деплой Logstash в прод
 cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
@@ -186,8 +187,11 @@ ansible-playbook --syntax-check logstash/deploy/logstash-deploy.yml
 ansible-playbook --syntax-check agents/deploy/agents-deploy.yml
 
 # Проверка агентов на хосте
-systemctl status auditbeat filebeat osqueryd
-auditbeat test output && filebeat test output
+systemctl status auditd fluent-bit filebeat osqueryd
+filebeat test output
+
+# Метрики fluent-bit (pipeline health)
+curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 ```
 
 ## Известные особенности и грабли
@@ -212,5 +216,5 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ---
 
-**Последнее обновление:** 2026-05-15
-**Версия проекта:** beats-ecs / auditbeat+filebeat+osquery → OpenSearch
+**Последнее обновление:** 2026-05-16
+**Версия проекта:** auditd+fluent-bit+osquery (основной стек) + filebeat [временный] → Logstash → OpenSearch

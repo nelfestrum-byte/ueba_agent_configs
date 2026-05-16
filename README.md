@@ -1,103 +1,113 @@
-# UEBA — система сбора и анализа поведения
+# UEBA — стенд сбора событий безопасности
 
-Два прод-сценария и локальный dev-стенд:
+Инфраструктурная основа для UEBA-системы (User and Entity Behavior Analytics) со скорингом.
+Собирает события с Linux-хостов, нормализует в **ECS 8.x** (Elastic Common Schema) и пишет в OpenSearch.
 
-1. **Logstash** — разворачивается на выделенном хосте через Docker, пишет во внешний OpenSearch (HTTPS + Security plugin).
-2. **Агенты** — auditbeat, filebeat, osquery на Debian/Ubuntu VM; события идут по beats-протоколу в Logstash.
-3. **Dev-стенд** — локальный прогон пайплайна: OpenSearch + Dashboards + Logstash, без агентских контейнеров.
+> **Совместимость с ECS:** все события нормализованы по ECS 8.11 — поля `event.*`, `process.*`, `user.*`, `network.*`, `file.*`, `host.*`. Индексы совместимы с Elastic Security и Kibana SIEM без дополнительных преобразований.
 
 ---
 
-## 1. Развертывание Logstash на прод-хосте
+## Архитектура пайплайна
 
-### Требования на целевом хосте
+```
+Linux-хост
+  ├── auditd (kernel)
+  │     └── /var/log/audit/audit.log
+  │               └── fluent-bit
+  │                     ├── auditd_merge.lua   — объединение по serial
+  │                     ├── auditd_enrich.lua  — ECS 8.x нормализация
+  │                     └── TCP 5045 ──────────────────────┐
+  │                                                         │
+  ├── osquery (diff-мониторинг)                             │
+  │     └── /var/log/osquery/osqueryd.results.log           │
+  │               └── fluent-bit                            │
+  │                     ├── osquery_enrich.lua — ECS 8.x    │
+  │                     └── TCP 5047 ──────────────────────┤
+  │                                                         │
+  └── filebeat [временный, будет заменён на fluent-bit]     │
+        └── /var/log/auth.log (SSH)                         │
+              └── beats 5044 ──────────────────────────────┤
+                                                            │
+                                                     Logstash
+                                                            │
+                                                      OpenSearch
+                                                 ├── fluent-audit-YYYY.MM.dd
+                                                 ├── fluent-osquery-YYYY.MM.dd
+                                                 └── filebeat-{ver}-YYYY.MM.dd
+```
 
-- Debian/Ubuntu, Docker 24+, Docker Compose v2
-- Пользователь `installer` в группе `docker` (sudo не требуется)
-- Доступ к Docker Hub или внутреннему registry (для `docker pull`)
-- Сеть: TCP 5044 доступен агентским машинам; 5046 (Windows), 5049 (Suricata) — по необходимости
+## Стек агентов
 
-### Первоначальная настройка (один раз)
+| Сервис | Роль | Индекс |
+|--------|------|--------|
+| **auditd** + **fluent-bit** | Kernel audit: execve, sudo, auth, файловые события | `fluent-audit-*` |
+| **osquery** + **fluent-bit** | Diff-мониторинг: процессы, соединения, пользователи, модули, cron, SSH-ключи | `fluent-osquery-*` |
+| **filebeat** *(временный)* | SSH auth.log → beats-протокол | `filebeat-*` |
+
+> **auditbeat отключён** — конфликтует с auditd за audit netlink-сокет.
+> **filebeat** — временный компонент только для SSH auth.log. Планируется замена на fluent-bit pipeline.
+
+---
+
+## Развёртывание
+
+### Предварительные требования
+
+| Компонент | Требования |
+|-----------|-----------|
+| Logstash-хост | Debian/Ubuntu, Docker 24+, Docker Compose v2, пользователь `installer` в группе `docker` |
+| Агентские хосты | Debian/Ubuntu, пользователь с sudo |
+| Ansible (control node) | Ansible 2.14+, доступ по SSH к целевым хостам |
+
+---
+
+### 1. Logstash (Docker)
+
+Logstash разворачивается в Docker на выделенном хосте и принимает события от всех агентов.
+
+**Первоначальная настройка:**
 
 ```bash
 cd logstash/deploy
-cp inventory.ini.example inventory.ini
-cp group_vars/all.yml.example group_vars/all.yml
+cp inventory.ini.example inventory.ini     # указать IP хоста
+cp group_vars/all.yml.example group_vars/all.yml  # указать URL OpenSearch
 ```
 
-Отредактируйте `inventory.ini` — укажите целевой хост:
-```ini
-[logstash]
-logstash-prod  ansible_host=10.0.0.5
-```
-
-Отредактируйте `group_vars/all.yml` — укажите параметры вашего OpenSearch:
+`group_vars/all.yml` — обязательные параметры:
 ```yaml
-opensearch_url: "https://opensearch.prod.example.com:9200"
+opensearch_url:  "https://opensearch.prod.example.com:9200"
 opensearch_user: "logstash_writer"
-# logstash_bind_addr: 10.0.0.5  # раскомментировать для биндинга на конкретный интерфейс
 ```
 
-**CA-сертификат OpenSearch** — положить в `logstash/deploy/files/opensearch-ca.pem` (gitignore'd).
+CA-сертификат OpenSearch (не хранится в git):
+```bash
+cp /path/to/opensearch-ca.pem logstash/deploy/files/opensearch-ca.pem
+```
 
-**Пароль OpenSearch** — сохранить через ansible-vault:
+Пароль через ansible-vault:
 ```bash
 ansible-vault create logstash/deploy/host_vars/<hostname>.yml
-# Содержимое файла: opensearch_password: "<пароль>"
+# содержимое: opensearch_password: "<пароль>"
 ```
 
-### Первое развертывание
-
+**Деплой:**
 ```bash
 cd logstash/deploy
 ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
-### Обновление конфигов
-
+**Проверка:**
 ```bash
-# Изменить logstash/configs/pipeline/ueba-main.conf, затем:
-cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
-```
-
-### Проверка после деплоя
-
-```bash
-# На целевом хосте:
+# На Logstash-хосте:
 docker ps --filter name=ueba-logstash
 curl -sf http://localhost:9600/_node/stats | python3 -m json.tool | grep -A2 '"events"'
 ```
 
 ---
 
-## 2. Развертывание агентов на Debian/Ubuntu VM
+### 2. Агенты (auditd + fluent-bit + filebeat + osquery)
 
-### Стек агентов
-
-| Сервис | Роль |
-|--------|------|
-| **auditbeat** | Заменяет auditd демон; читает события ядра через netlink (execve, sudo, auth, файловые изменения) |
-| **filebeat** | Читает osquery results.log + /var/log/auth.log (sshd) |
-| **osquery** | Источник данных для filebeat (diff: процессы, соединения, пользователи, модули, сервисы) |
-
-### Требования
-
-- Debian/Ubuntu (apt required)
-- Пользователь с правами sudo
-- auditd и fluent-bit должны быть удалены до деплоя (см. ниже)
-
-### Очистка старого стека (один раз на каждом хосте)
-
-```bash
-systemctl stop auditd fluent-bit
-systemctl disable auditd fluent-bit
-apt remove --purge auditd audispd-plugins fluent-bit -y
-rm -rf /etc/audit /etc/fluent-bit /etc/default/fluent-bit
-rm -rf /var/lib/fluent-bit /etc/systemd/system/fluent-bit.service.d
-systemctl daemon-reload
-```
-
-### Первоначальная настройка (один раз)
+**Первоначальная настройка:**
 
 ```bash
 cd agents/deploy
@@ -105,79 +115,44 @@ cp inventory.ini.example inventory.ini
 cp group_vars/all.yml.example group_vars/all.yml
 ```
 
-Отредактируйте `inventory.ini`:
-```ini
-[ueba_agents]
-agent01  ansible_host=10.0.1.11
-agent02  ansible_host=10.0.1.12
-```
-
-Отредактируйте `group_vars/all.yml`:
+`group_vars/all.yml`:
 ```yaml
-logstash_host: 10.0.0.5      # hostname или IP Logstash
-elastic_version: "9.4.1"
-auditbeat_arch: "amd64"      # или arm64
-filebeat_arch:  "amd64"
-osquery_version: "5.23.0"
+logstash_host:    10.0.0.5      # IP/hostname Logstash
+elastic_version:  "9.4.1"
+filebeat_arch:    "amd64"       # или arm64
+osquery_version:  "5.23.0"
 ```
 
-### Подготовка пакетов (офлайн-режим)
-
-Скачайте `.deb` на машине с доступом в интернет через Docker:
-
+**Подготовка пакетов (офлайн):**
 ```powershell
-# Windows (Docker Desktop required)
+# Windows, требуется Docker Desktop:
 .\agents\deploy\fetch-packages\fetch.ps1
-
-# Указать конкретные версии:
-.\agents\deploy\fetch-packages\fetch.ps1 -ElasticVersion 9.4.1 -OsqueryVersion 5.23.0
 ```
 
-Скрипт положит файлы в `agents/deploy/files/` и покажет, что прописать в `group_vars/all.yml`.
-
-Пакеты (`*.deb`) в git не хранятся.
-
-### Установка
-
+**Деплой:**
 ```bash
 cd agents/deploy
 ansible-playbook agents-deploy.yml --ask-become-pass
 ```
 
-Плейбук: добавляет apt-репозитории (или устанавливает из локальных `.deb`) → устанавливает auditbeat, filebeat, osquery → раскладывает конфиги → настраивает keystores → выставляет права доступа → запускает сервисы.
+Плейбук: устанавливает и настраивает auditd, fluent-bit, filebeat, osquery; раскладывает конфиги и Lua-скрипты; запускает сервисы.
 
-### Проверка на агентской машине
-
+**Проверка на агенте:**
 ```bash
-systemctl status auditbeat filebeat osqueryd
+systemctl status auditd fluent-bit filebeat osqueryd
 
-# Проверить соединение с Logstash:
-auditbeat test output
-filebeat test output
+# Метрики fluent-bit (включая состояние Lua-скриптов):
+curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
-# Логи агентов:
-journalctl -u auditbeat -n 30 --no-pager
-journalctl -u filebeat  -n 30 --no-pager
-```
-
-### Проверка в OpenSearch
-
-```bash
-# Через ~60 сек после запуска агентов:
-curl -s 'opensearch:9200/_cat/indices?v&index=*-events-*,host-metrics-*' | sort
-
-# Первые события:
-# ssh <host>           → auth-events-*    (filebeat system/auth)
-# sudo <cmd>           → auth-events-*    (auditbeat auditd, event.action: privilege_use)
-# любой execve         → process-events-* (auditbeat auditd)
-# osquery diff (60 сек)→ process-events-*, network-events-*, config-events-*
+# Диагностика: если filter.lua.0.add_records = 0 при ненулевом input.tail.0.records
+# — merge-скрипт не флашит буфер. Проверить auditd_merge.lua timeout.
 ```
 
 ---
 
-## 3. Локальный dev-стенд
+### 3. Dev-стенд (OpenSearch + Logstash локально)
 
-Только для разработки и отладки пайплайна Logstash — без агентских контейнеров.
+Для разработки и тестирования пайплайна без реальных агентов:
 
 ```bash
 cd dev_stand
@@ -185,19 +160,31 @@ docker compose up -d
 docker compose logs -f logstash
 ```
 
-Dashboards: http://localhost:5601
+OpenSearch Dashboards: http://localhost:5601
 
-Тестирование пайплайна требует реальных агентов, направленных на `<host>:5044`.
+Тестовые события можно отправить скриптами из `dev_stand/scripts/`.
 
-Подробнее: [dev_stand/README.md](dev_stand/README.md)
+---
+
+## Проверка данных в OpenSearch
+
+```bash
+# Список индексов:
+curl -s 'http://opensearch:9200/_cat/indices?v&index=fluent-*,filebeat-*' | sort
+
+# Первые события после запуска:
+# ssh <host>         → filebeat-* (system.auth)
+# sudo <cmd>         → fluent-audit-* (event.action: sudo / privilege_use)
+# любой execve       → fluent-audit-* (event.category: process)
+# osquery diff ~30с  → fluent-osquery-* (event.dataset: osquery)
+```
 
 ---
 
 ## Известные ограничения
 
-- **TLS-сертификаты**: CA-сертификат не отслеживается git'ом — нужно положить вручную перед первым деплоем Logstash.
-- **Права пользователя installer**: должен быть в группе `docker`; если нет — включить `ansible_become=true` в `inventory.ini`.
-- **Версии пакетов**: в онлайн-режиме устанавливается `latest`; в офлайн-режиме версия определяется скачанным `.deb` файлом.
-- **Офлайн-пакеты**: `agents/deploy/files/*.deb` не хранятся в git; при смене версии перезапустите `fetch.ps1` и обновите переменные в `group_vars/all.yml`.
-- **auditbeat требует root**: для доступа к audit netlink; конфликтует с auditd демоном — auditd должен быть остановлен и отключён до запуска auditbeat.
-- **index templates**: поля ECS (process.args[], user.audit.id, file.hash.sha256) используют динамический маппинг OpenSearch — для прода рекомендуется задать явные index templates.
+- **auditd 4.x**: не пишет `type=EOE` в audit.log. `auditd_merge.lua` использует wall-clock timeout (не EOE) для флаша буфера.
+- **TLS не настроен**: fluent-bit → Logstash по TCP без шифрования. Для прода использовать beats-протокол с mTLS.
+- **CA-сертификат** не хранится в git — положить вручную перед деплоем Logstash.
+- **Офлайн-пакеты** (`*.deb`) не хранятся в git — перезапустить `fetch.ps1` при смене версий.
+- **ECS index templates**: для прода рекомендуется явно задать маппинги для `process.args[]`, `user.id`, `file.hash.*`.
