@@ -39,6 +39,10 @@ local EVENT_CATEGORY = {
 }
 
 -- ── MITRE ATT&CK теги по syscall ──
+-- Отключено: поля threat.* семантически предназначены для алертов (Elastic Security),
+-- а не для raw-событий. Для UEBA-скоринга использовать отдельную аннотацию.
+-- Для включения: раскомментировать таблицу и блок применения ниже.
+--[[
 local MITRE_TAGS = {
     execve    = {"T1059",     "Execution: Command and Scripting Interpreter"},
     execveat  = {"T1059",     "Execution: Command and Scripting Interpreter"},
@@ -54,6 +58,7 @@ local MITRE_TAGS = {
     unlink    = {"T1070.004", "Defense Evasion: Indicator Removal on Host"},
     unlinkat  = {"T1070.004", "Defense Evasion: Indicator Removal on Host"},
 }
+--]]
 
 -- ── Кэш hostname ──
 local _hostname = nil
@@ -196,13 +201,15 @@ function enrich_ecs(tag, timestamp, record)
             record["event.category"] = "iam"
         end
 
-        -- MITRE ATT&CK
+        -- MITRE ATT&CK (отключено, см. комментарий у таблицы MITRE_TAGS выше)
+        --[[
         local mitre = MITRE_TAGS[sc_name]
         if mitre then
             record["threat.technique.id"]   = mitre[1]
             record["threat.technique.name"] = mitre[2]
             record["threat.framework"]      = "MITRE ATT&CK"
         end
+        --]]
     end
 
     -- ── Файл (из PATH и CWD) ──
