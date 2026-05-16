@@ -1,0 +1,341 @@
+---
+# osquery-trigger.yml — тест diff-событий osquery
+#
+# ПРИМЕНИТЬ:  ansible-playbook osquery-trigger.yml -e mode=apply
+# ОТКАТИТЬ:   ansible-playbook osquery-trigger.yml -e mode=rollback
+#
+# Удалённый хост:
+#   ansible-playbook osquery-trigger.yml -i ../../agents/deploy/inventory.ini \
+#                    -e mode=apply --ask-become-pass
+#
+# Проверка результата (через max 120s):
+#   sudo grep osq-test /var/log/osquery/osqueryd.results.log | python3 -m json.tool
+
+- name: osquery diff trigger test
+  hosts: all
+  become: true
+
+  vars:
+    mode: apply
+
+    test_user:     osq-test-user
+    test_group:    osq-test-group
+
+    # Публичная часть — приватного ключа нет, реального доступа не даёт
+    test_ssh_key: >-
+      ssh-ed25519
+      AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForOsqueryTriggerTestingOnlyNotASecret
+      osquery-test@localhost
+
+    test_cron_file:     /etc/cron.d/osq-test
+    test_sudoers_file:  /etc/sudoers.d/osq-test
+    test_hosts_line:    "198.51.100.1 osq-test.internal"
+    test_initd_file:    /etc/init.d/osq-test
+    test_service_name:  osq-test
+    test_service_file:  /etc/systemd/system/osq-test.service
+    # /bin/sleep → /tmp — выйдет из-под фильтра processes (path NOT LIKE '/bin/%')
+    test_process_bin:   /tmp/osq-test-sleep
+    test_mount_dir:     /mnt/osq-test-mount
+    test_listener_port: 19876
+    test_listener_pid:  /tmp/osq-listener.pid
+
+  tasks:
+
+    # ══════════════════════════════════════════════════════════════
+    # APPLY
+    # ══════════════════════════════════════════════════════════════
+
+    - when: mode == 'apply'
+      block:
+
+        # TABLE: groups (120s)
+        - name: "[apply] groups — создать группу"
+          group:
+            name: "{{ test_group }}"
+            state: present
+
+        # TABLE: users, user_groups (120s)
+        - name: "[apply] users — создать пользователя"
+          user:
+            name: "{{ test_user }}"
+            group: "{{ test_group }}"
+            shell: /usr/sbin/nologin
+            create_home: true
+            comment: "osquery-test DO NOT USE IN PROD"
+            state: present
+
+        # TABLE: ssh_authorized_keys (60s)
+        - name: "[apply] ssh_authorized_keys — добавить ключ"
+          authorized_key:
+            user: "{{ test_user }}"
+            key: "{{ test_ssh_key }}"
+            state: present
+
+        # TABLE: crontabs (60s)
+        - name: "[apply] crontabs — добавить задание"
+          copy:
+            dest: "{{ test_cron_file }}"
+            content: |
+              # osquery-test — safe to delete
+              */15 * * * * {{ test_user }} /bin/echo osq-test >/dev/null 2>&1
+            mode: '0644'
+
+        # TABLE: sudoers (120s)
+        - name: "[apply] sudoers — добавить правило"
+          copy:
+            dest: "{{ test_sudoers_file }}"
+            content: |
+              # osquery-test — safe to delete
+              {{ test_user }} ALL=(ALL) NOPASSWD: /usr/bin/id
+            mode: '0440'
+            validate: 'visudo -cf %s'
+
+        # TABLE: etc_hosts (120s)
+        - name: "[apply] etc_hosts — добавить запись"
+          lineinfile:
+            path: /etc/hosts
+            line: "{{ test_hosts_line }}"
+            state: present
+
+        # TABLE: startup_items (300s) — osquery читает /etc/init.d/ на Linux
+        - name: "[apply] startup_items — создать init.d-скрипт"
+          copy:
+            dest: "{{ test_initd_file }}"
+            content: |
+              #!/bin/sh
+              ### BEGIN INIT INFO
+              # Provides:          osq-test
+              # Required-Start:
+              # Required-Stop:
+              # Default-Start:     2 3 4 5
+              # Default-Stop:      0 1 6
+              # Short-Description: osquery trigger test — safe to delete
+              ### END INIT INFO
+              echo "osq-test noop"
+            mode: '0755'
+
+        # TABLE: processes (30s) — процесс из нестандартного пути
+        - name: "[apply] processes — скопировать sleep в /tmp"
+          copy:
+            src: /bin/sleep
+            dest: "{{ test_process_bin }}"
+            mode: '0755'
+            remote_src: true
+
+        # TABLE: suid_bins (3600s)
+        - name: "[apply] suid_bins — выставить SUID бит"
+          file:
+            path: "{{ test_process_bin }}"
+            mode: '4755'
+
+        # TABLE: services (60s) + processes
+        - name: "[apply] services — создать systemd unit"
+          copy:
+            dest: "{{ test_service_file }}"
+            content: |
+              [Unit]
+              Description=osquery-test trigger service — safe to delete
+
+              [Service]
+              ExecStart={{ test_process_bin }} infinity
+              Restart=no
+
+              [Install]
+              WantedBy=multi-user.target
+            mode: '0644'
+
+        - name: "[apply] services — запустить"
+          systemd:
+            name: "{{ test_service_name }}"
+            state: started
+            daemon_reload: true
+
+        # TABLE: mounts (120s) — bind-mount без записи в fstab
+        - name: "[apply] mounts — создать точку монтирования"
+          file:
+            path: "{{ test_mount_dir }}"
+            state: directory
+            mode: '0755'
+
+        - name: "[apply] mounts — примонтировать bind-mount"
+          shell: |
+            if mountpoint -q "{{ test_mount_dir }}"; then
+              echo "already_mounted"
+            else
+              mount --bind /tmp "{{ test_mount_dir }}"
+              echo "mounted"
+            fi
+          args:
+            executable: /bin/bash
+          register: _mount
+          changed_when: "'mounted' in _mount.stdout"
+
+        # TABLE: iptables (300s)
+        - name: "[apply] iptables — добавить правило"
+          shell: |
+            if iptables -C INPUT -m comment --comment "osquery-test" -j RETURN 2>/dev/null; then
+              echo "already_exists"
+            else
+              iptables -A INPUT -m comment --comment "osquery-test" -j RETURN
+              echo "added"
+            fi
+          args:
+            executable: /bin/bash
+          register: _ipt
+          changed_when: "'added' in _ipt.stdout"
+
+        # TABLE: listening_ports (60s)
+        - name: "[apply] listening_ports — запустить TCP-листенер :{{ test_listener_port }}"
+          shell: |
+            if [ -f "{{ test_listener_pid }}" ] && kill -0 "$(cat {{ test_listener_pid }})" 2>/dev/null; then
+              echo "already_running"
+            else
+              python3 -c "
+            import socket, os, time
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(('0.0.0.0', {{ test_listener_port }}))
+            s.listen(5)
+            open('{{ test_listener_pid }}', 'w').write(str(os.getpid()))
+            time.sleep(7200)
+            " &>/tmp/osq-listener.log &
+              sleep 0.5
+              echo "started"
+            fi
+          args:
+            executable: /bin/bash
+          register: _listener
+          changed_when: "'started' in _listener.stdout"
+
+        - name: "[apply] ИТОГ"
+          debug:
+            msg:
+              - "============================================"
+              - " osquery-test артефакты созданы"
+              - "============================================"
+              - "  users / user_groups  : {{ test_user }} / {{ test_group }}"
+              - "  ssh_authorized_keys  : ~{{ test_user }}/.ssh/authorized_keys"
+              - "  crontabs             : {{ test_cron_file }}"
+              - "  sudoers              : {{ test_sudoers_file }}"
+              - "  etc_hosts            : {{ test_hosts_line }}"
+              - "  startup_items        : {{ test_initd_file }}"
+              - "  suid_bins            : {{ test_process_bin }} (mode 4755)"
+              - "  services             : {{ test_service_name }} (started)"
+              - "  processes            : {{ test_process_bin }} (via service)"
+              - "  mounts               : {{ test_mount_dir }} → /tmp"
+              - "  iptables             : INPUT RETURN (comment osquery-test)"
+              - "  listening_ports      : 0.0.0.0:{{ test_listener_port }}/tcp"
+              - "--------------------------------------------"
+              - "Ждать max 300s, затем проверить:"
+              - "  sudo grep osq-test /var/log/osquery/osqueryd.results.log"
+
+    # ══════════════════════════════════════════════════════════════
+    # ROLLBACK — порядок обратный apply
+    # ══════════════════════════════════════════════════════════════
+
+    - when: mode == 'rollback'
+      block:
+
+        - name: "[rollback] listening_ports — убить листенер"
+          shell: |
+            if [ -f "{{ test_listener_pid }}" ]; then
+              kill "$(cat {{ test_listener_pid }})" 2>/dev/null || true
+              rm -f "{{ test_listener_pid }}"
+            fi
+          args:
+            executable: /bin/bash
+          changed_when: false
+
+        - name: "[rollback] iptables — удалить правило"
+          shell: |
+            iptables -D INPUT -m comment --comment "osquery-test" -j RETURN 2>/dev/null || true
+          args:
+            executable: /bin/bash
+          changed_when: false
+
+        - name: "[rollback] mounts — отмонтировать"
+          shell: |
+            if mountpoint -q "{{ test_mount_dir }}"; then
+              umount "{{ test_mount_dir }}"
+            fi
+          args:
+            executable: /bin/bash
+          changed_when: false
+
+        - name: "[rollback] mounts — удалить точку монтирования"
+          file:
+            path: "{{ test_mount_dir }}"
+            state: absent
+
+        - name: "[rollback] services — остановить"
+          systemd:
+            name: "{{ test_service_name }}"
+            state: stopped
+            daemon_reload: true
+          ignore_errors: true
+
+        - name: "[rollback] services — удалить unit-файл"
+          file:
+            path: "{{ test_service_file }}"
+            state: absent
+          notify: reload systemd
+
+        # suid_bins: бит снимается удалением файла
+        - name: "[rollback] processes / suid_bins — удалить бинарник из /tmp"
+          file:
+            path: "{{ test_process_bin }}"
+            state: absent
+
+        - name: "[rollback] startup_items — удалить init.d-скрипт"
+          file:
+            path: "{{ test_initd_file }}"
+            state: absent
+
+        - name: "[rollback] etc_hosts — удалить запись"
+          lineinfile:
+            path: /etc/hosts
+            line: "{{ test_hosts_line }}"
+            state: absent
+
+        - name: "[rollback] sudoers — удалить файл"
+          file:
+            path: "{{ test_sudoers_file }}"
+            state: absent
+
+        - name: "[rollback] crontabs — удалить файл"
+          file:
+            path: "{{ test_cron_file }}"
+            state: absent
+
+        - name: "[rollback] ssh_authorized_keys — удалить ключ"
+          authorized_key:
+            user: "{{ test_user }}"
+            key: "{{ test_ssh_key }}"
+            state: absent
+          ignore_errors: true
+
+        - name: "[rollback] users — удалить пользователя"
+          user:
+            name: "{{ test_user }}"
+            state: absent
+            remove: true
+            force: true
+
+        - name: "[rollback] groups — удалить группу"
+          group:
+            name: "{{ test_group }}"
+            state: absent
+
+        - name: "[rollback] ИТОГ"
+          debug:
+            msg:
+              - "============================================"
+              - " osquery-test артефакты удалены"
+              - "============================================"
+              - "Ждать max 300s, затем проверить action:removed:"
+              - "  sudo grep osq-test /var/log/osquery/osqueryd.results.log"
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: true
