@@ -240,5 +240,5 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ---
 
-**Последнее обновление:** 2026-05-16
+**Последнее обновление:** 2026-05-18
 **Версия проекта:** auditd+fluent-bit+osquery (основной стек) + filebeat [временный] → Logstash → OpenSearch

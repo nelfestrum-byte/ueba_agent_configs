@@ -146,11 +146,20 @@ WHERE p.path NOT LIKE '/usr/%' AND p.path NOT LIKE '/bin/%' ...
 - **UEBA**: базовая линия процессов; появление нового path — сигнал
 
 #### `listening_ports` (интервал: 60 сек)
-Открытые сетевые порты и привязанные к ним процессы.
+Открытые сетевые порты, привязанные к ним процессы и владельцы процессов.
+
+```sql
+SELECT l.pid, p.name AS process_name, l.port, l.protocol, l.address,
+       p.uid, u.username,
+       (SELECT hostname FROM system_info) AS hostname
+FROM listening_ports l
+LEFT JOIN processes p ON l.pid = p.pid
+LEFT JOIN users u ON p.uid = u.uid
+```
 
 - `action: added` → `event.action: port_listening` → новый прослушивающий порт
-- ECS: `destination.port`, `destination.ip`, `network.transport`, `process.pid`, `process.name`
-- **UEBA**: появление нового порта у хоста — потенциальный backdoor / lateral movement
+- ECS: `destination.port`, `destination.ip`, `network.transport`, `process.pid`, `process.name`, `process.entity_id`, `user.name`, `user.id`
+- **UEBA**: появление нового порта у хоста — потенциальный backdoor / lateral movement; `user.name` позволяет связать порт с конкретным пользователем
 
 #### `process_connections` (интервал: 30 сек)
 Активные сетевые соединения процессов (только с внешними IP, без loopback).
@@ -203,10 +212,16 @@ SSH authorized_keys всех пользователей.
 - **UEBA**: новый сервис → persistence механизм
 
 #### `crontabs` (интервал: 60 сек)
-Cron-задачи (system + user crontabs).
+Cron-задачи (system + user crontabs) с привязкой к пользователю.
+
+```sql
+-- username: для /var/spool/cron/crontabs/<user> — извлекается из path; для /etc/cron.d/ — 'root'
+-- uid: subquery к таблице users по username
+```
 
 - `action: added` → `event.action: cron_modified`
-- **UEBA**: новая cron-задача → persistence
+- ECS: `user.name`, `user.id` (через path-экстракцию + JOIN users)
+- **UEBA**: новая cron-задача → persistence; `user.name` позволяет атрибутировать задачу конкретному пользователю
 
 #### `sudoers` (интервал: 120 сек)
 Правила `/etc/sudoers`.
@@ -306,6 +321,8 @@ CA и self-signed сертификаты из системного хранил�
 | `process.parent.entity_id` | ID родительского процесса; отсутствует если родитель не резолвирован. |
 | `process.start` | Старт процесса, epoch seconds. Для таблицы `processes` = `cols.start_time`. Для остальных — из кэша или `/proc`. |
 | `process.parent.start` | Старт родительского процесса, epoch seconds. |
+| `user.name` | Имя пользователя (для запросов: processes, process_connections, process_open_files, logged_in_users, users, ssh_authorized_keys, user_groups, startup_items, suid_bins, listening_ports, crontabs) |
+| `user.id` | UID пользователя (для тех же запросов, где доступен uid) |
 | `osquery.result.name` | имя запроса (processes, listening_ports, ...) |
 | `osquery.result.action` | added / removed |
 | `osquery.result.host_identifier` | hostname из osquery |
