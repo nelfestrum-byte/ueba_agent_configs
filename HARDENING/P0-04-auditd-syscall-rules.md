@@ -1,4 +1,4 @@
-# P0-03. Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm
+# P0-04. Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm
 
 ## Контекст для AI
 
@@ -6,7 +6,7 @@
 
 - [CLAUDE.md](../CLAUDE.md) — навигатор по проекту.
 - [README_FOR_AI.md](../README_FOR_AI.md), раздел 3 — текущая ECS-схема auditd-источника. Эта задача расширяет таблицу `event.action` пятью новыми значениями.
-- [HARDENING_PLAN.md, раздел P0-03](HARDENING_PLAN.md) — обоснование и решения.
+- [HARDENING_PLAN.md, раздел P0-04](HARDENING_PLAN.md) — обоснование и решения.
 
 ## Цель итерации
 

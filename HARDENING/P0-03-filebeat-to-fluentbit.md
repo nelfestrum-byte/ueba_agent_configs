@@ -1,4 +1,4 @@
-# P0-02. Замена filebeat на fluent-bit SSH-pipeline
+# P0-03. Замена filebeat на fluent-bit SSH-pipeline
 
 ## Контекст для AI
 
@@ -6,7 +6,7 @@
 
 - [CLAUDE.md](../CLAUDE.md) — главный навигатор по проекту.
 - [README_FOR_AI.md](../README_FOR_AI.md) — справочник по ECS-схеме. **Раздел 5** ("Источник: filebeat — SSH auth") нужно будет полностью переписать после этой задачи.
-- [HARDENING_PLAN.md, раздел P0-02](HARDENING_PLAN.md) — полные детали, решения и грабли.
+- [HARDENING_PLAN.md, раздел P0-03](HARDENING_PLAN.md) — полные детали, решения и грабли.
 
 ## Цель итерации
 

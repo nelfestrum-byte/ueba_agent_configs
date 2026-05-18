@@ -96,6 +96,7 @@ auditd перехватывает системные вызовы на уров�
 | `file.mode` | keyword | при PATH | права (rwxr-xr-x) |
 | `auditd.data.syscall` | keyword | при SYSCALL | имя syscall |
 | `auditd.session` | integer | если ses > 0 | номер сессии auditd |
+| `user.session.id` | keyword | если ses > 0 и ses ≠ 0xFFFFFFFF | Стабильный ID сессии: FNV-1a hash(host.name:btime:ses), 16 hex. Одинаков для всех событий одной пользовательской сессии (auditd + osquery). Переключается при новом логине. |
 | `tags` | keyword[] | всегда | `["auditd","security","linux"]` |
 | `@timestamp` | date | всегда | время события |
 
@@ -321,6 +322,7 @@ CA и self-signed сертификаты из системного хранил�
 | `process.parent.entity_id` | ID родительского процесса; отсутствует если родитель не резолвирован. |
 | `process.start` | Старт процесса, epoch seconds. Для таблицы `processes` = `cols.start_time`. Для остальных — из кэша или `/proc`. |
 | `process.parent.start` | Старт родительского процесса, epoch seconds. |
+| `user.session.id` | Стабильный ID сессии: FNV-1a hash(host.name:btime:ses), 16 hex. Читается из `/proc/<pid>/sessionid`. Отсутствует если процесс завершился до enrich. **Совпадает** с `user.session.id` в auditd для той же сессии. |
 | `user.name` | Имя пользователя (для запросов: processes, process_connections, process_open_files, logged_in_users, users, ssh_authorized_keys, user_groups, startup_items, suid_bins, listening_ports, crontabs) |
 | `user.id` | UID пользователя (для тех же запросов, где доступен uid) |
 | `osquery.result.name` | имя запроса (processes, listening_ports, ...) |
@@ -370,11 +372,14 @@ CA и self-signed сертификаты из системного хранил�
 | Имя пользователя | `user.name` | все источники |
 | Реальный пользователь (до sudo) | `user.effective.id` | auditd (auid) |
 | Хост | `host.name` | все источники |
+| Сессия пользователя | `user.session.id` | auditd, osquery — **join корректен**: одинаковая формула FNV-1a(host.name:btime:ses); объединяет все события от логина до выхода |
 | Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed |
 | Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
 | Исходный IP (SSH) | `source.ip` | filebeat, osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections |
 | Команда | `process.command_line` | auditd (execve), osquery processes |
+
+> **Кросс-источниковый join по `user.session.id` корректен**: одна формула `FNV-1a(host.name + ":" + btime + ":" + ses)` в обоих enrich-скриптах. Для auditd `ses` берётся из каждого события напрямую; для osquery — из `/proc/<pid>/sessionid`. Поле отсутствует если `ses = 0` (kernel) или `ses = 0xFFFFFFFF` (unset), либо если процесс завершился до enrich osquery.
 
 > **Кросс-источниковый join auditd ↔ osquery по `process.entity_id` корректен** при условии, что оба enrich-скрипта используют одинаковую формулу: `FNV-1a(host.name + ":" + pid + ":" + start_time)`, где `start_time` берётся из `/proc/<pid>/stat field 22 + btime` (целое число, epoch seconds). Для exit-событий короткоживущих процессов поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует, что entity_id в этом документе **не совпадёт** с osquery.
 

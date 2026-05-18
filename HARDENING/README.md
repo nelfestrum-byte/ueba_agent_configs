@@ -17,17 +17,20 @@
 
 Рекомендуемый порядок — по приоритетам. Промпты написаны для **P0, P1 и P2**. P3/P4 описаны только в плане — промпт-файлы для них появятся ближе к делу.
 
+P0-02 (`user.session.id`) зависит от P0-01 (переиспользует функцию `short_id()` и кэш `btime` из auditd_enrich.lua / osquery_enrich.lua) — выполнять после P0-01.
+
 | Очередь | ID | Файл промпта | Зависимости |
 | --- | --- | --- | --- |
 | 1 | P0-01 | [P0-01-process-entity-id.md](P0-01-process-entity-id.md) | — |
-| 2 | P0-02 | [P0-02-filebeat-to-fluentbit.md](P0-02-filebeat-to-fluentbit.md) | — |
-| 3 | P0-03 | [P0-03-auditd-syscall-rules.md](P0-03-auditd-syscall-rules.md) | — |
-| 4 | P1-01 | [P1-01-neo23x0-gap-analysis.md](P1-01-neo23x0-gap-analysis.md) | — |
-| 5 | P1-02 | [P1-02-ecs-index-templates.md](P1-02-ecs-index-templates.md) | желательно после P0-01, P0-02 |
-| 6 | P1-03 | [P1-03-mtls-channel.md](P1-03-mtls-channel.md) | желательно после P0-02 |
-| 7 | P1-04 | [P1-04-auditd-trigger-playbook.md](P1-04-auditd-trigger-playbook.md) | желательно после P0-03 и P1-01 |
-| 8 | P2-01 | [P2-01-osquery-bpf-backend.md](P2-01-osquery-bpf-backend.md) | cross-task с P0-03 (whitelist) |
-| 9 | P2-02 | [P2-02-osquery-query-expansion.md](P2-02-osquery-query-expansion.md) | удобно совмещать с P2-01 (общий .j2 template) |
+| 2 | P0-02 | [P0-02-session-id.md](P0-02-session-id.md) | P0-01 (переиспользует `short_id()`) |
+| 3 | P0-03 | [P0-03-filebeat-to-fluentbit.md](P0-03-filebeat-to-fluentbit.md) | — |
+| 4 | P0-04 | [P0-04-auditd-syscall-rules.md](P0-04-auditd-syscall-rules.md) | — |
+| 5 | P1-01 | [P1-01-neo23x0-gap-analysis.md](P1-01-neo23x0-gap-analysis.md) | — |
+| 6 | P1-02 | [P1-02-ecs-index-templates.md](P1-02-ecs-index-templates.md) | желательно после P0-01, P0-02, P0-03 |
+| 7 | P1-03 | [P1-03-mtls-channel.md](P1-03-mtls-channel.md) | желательно после P0-03 |
+| 8 | P1-04 | [P1-04-auditd-trigger-playbook.md](P1-04-auditd-trigger-playbook.md) | желательно после P0-04 и P1-01 |
+| 9 | P2-01 | [P2-01-osquery-bpf-backend.md](P2-01-osquery-bpf-backend.md) | cross-task с P0-04 (whitelist) |
+| 10 | P2-02 | [P2-02-osquery-query-expansion.md](P2-02-osquery-query-expansion.md) | удобно совмещать с P2-01 (общий .j2 template) |
 
 Порядок **внутри одного приоритета** можно менять — задачи независимы по смыслу. Зависимости в правой колонке — мягкие (улучшают, но не блокируют); каждая задача self-contained и пишет код от текущего состояния репо.
 

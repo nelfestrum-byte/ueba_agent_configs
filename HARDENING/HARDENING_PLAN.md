@@ -16,13 +16,14 @@
 | ID | Задача | Стоимость | Зависимости |
 | --- | --- | --- | --- |
 | P0-01 | `process.entity_id` и `process.parent.entity_id` в Lua-enrich | ~1 час | — |
-| P0-02 | Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`) | ~1 день | — |
-| P0-03 | Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm | ~2-3 часа | учитывает P1-01 уточнения |
+| P0-02 | `user.session.id` — сквозной идентификатор сессии | ~2-3 часа | P0-01 (переиспользует `short_id()` и `btime`-кэш) |
+| P0-03 | Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`) | ~1 день | — |
+| P0-04 | Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm | ~2-3 часа | учитывает P1-01 уточнения |
 | P1-01 | Gap-анализ audit.rules против Neo23x0 ruleset (Tier A + Tier B) | ~3-4 часа | — |
-| P1-02 | ECS Index Templates для OpenSearch (4 шаблона) | ~4 часа | после P0-01, P0-02 |
-| P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | после P0-02 |
-| P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-03, P1-01 |
-| P2-01 | osquery BPF backend — переключаемый per-host (docker on / workstation off) | ~1 день | cross-task с P0-03 (whitelist) |
+| P1-02 | ECS Index Templates для OpenSearch (4 шаблона) | ~4 часа | после P0-01, P0-02, P0-03 |
+| P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | после P0-03 |
+| P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-04, P1-01 |
+| P2-01 | osquery BPF backend — переключаемый per-host (docker on / workstation off) | ~1 день | cross-task с P0-04 (whitelist) |
 | P2-02 | Расширение osquery-запросов (shell_history, process_envs, supply-chain и пр.) | ~0.5 дня | опц. совмещать с P2-01 (.j2-template) |
 | P3-01 | Unit-тесты Lua-скриптов (merge + enrich) — **отложено** | ~1 день | — |
 | P3-02 | CI: luacheck + syntax-check + dry-run | ~4 часа | — |
@@ -81,24 +82,84 @@ ECS-поле `process.entity_id` (стабильный hash из `host.id + pid 
 
 ---
 
-## P0-02. Замена filebeat на fluent-bit SSH-pipeline
+## P0-02. `user.session.id` — сквозной идентификатор сессии
+
+**Приоритет:** P0 (ключевой примитив для UEBA-скоринга)
+**Стоимость:** ~2-3 часа
+**Статус:** не начато
+**Зависимости:** P0-01 (переиспользует `short_id()` и `btime`-кэш)
+
+### Зачем (P0-02)
+
+UEBA-скоринг работает с «сессией» как единицей анализа: все действия пользователя от логина до выхода должны быть связаны одним идентификатором. Без этого поля:
+
+1. **Нет базовой линии сессии** — невозможен baseline «типичная сессия пользователя X на хосте Y» (длина, процессы, сетевые соединения).
+2. **Аномалия не атрибутируется сессии** — подъём привилегий + lateral movement + exfiltration в одном логине видны как три разрозненных события, а не как единый инцидент.
+3. **Восстановление инцидента** — без `session_id` нельзя быстро выстроить полный граф действий конкретного логина.
+
+Linux ядро уже решает задачу: при логине `pam_loginuid` присваивает сессии **audit session number** (`ses`). Это значение наследуется **всеми дочерними процессами** (хранится в `/proc/<pid>/sessionid`) и присутствует в каждой auditd-записи как поле `ses`. Нам остаётся сделать его глобально уникальным.
+
+### Что делать (P0-02)
+
+**Формула:**
+```text
+user.session.id = FNV-1a(host.name + ":" + btime + ":" + ses)  →  16 hex символов
+```
+Та же функция `short_id()`, что P0-01 использует для `process.entity_id`, — без новых зависимостей.
+
+**1. `agents/configs/fluent-bit/scripts/auditd_enrich.lua`:**
+- `ses` уже присутствует в merged-записи.
+- Фильтр: пропустить если `ses == 0` (kernel tasks) или `ses == 4294967295` (0xFFFFFFFF, «unset»).
+- Добавить `record["user.session.id"] = short_id(hostname .. ":" .. tostring(btime) .. ":" .. tostring(ses))`.
+- `btime` уже кэширован для `process.entity_id` — переиспользовать без повторного чтения `/proc/stat`.
+
+**2. `agents/configs/fluent-bit/scripts/osquery_enrich.lua`:**
+- Для событий с `pid > 0`: читать `/proc/<pid>/sessionid` (аналогично `/proc/<pid>/stat`, уже реализовано).
+- Та же формула → `user.session.id` совпадает с auditd для одной сессии.
+- Если файл недоступен (процесс завершился) — пропустить поле без fallback.
+
+### Точки изменений (P0-02)
+
+- [agents/configs/fluent-bit/scripts/auditd_enrich.lua](../agents/configs/fluent-bit/scripts/auditd_enrich.lua)
+- [agents/configs/fluent-bit/scripts/osquery_enrich.lua](../agents/configs/fluent-bit/scripts/osquery_enrich.lua)
+- [README_FOR_AI.md](../README_FOR_AI.md) — добавить `user.session.id` в таблицы полей разделов 3.3, 4.4 и в раздел 6.
+
+### Критерий готовности (P0-02)
+
+- В `fluent-audit-*` у события с `auditd.session > 0` присутствует `user.session.id` (16 hex).
+- Два события от разных процессов одного логина (один `ses`) дают **одинаковый** `user.session.id`.
+- После нового `ssh user@host` `user.session.id` меняется.
+- В `fluent-osquery-*` для `processes`-событий присутствует `user.session.id`, совпадающий с auditd для того же процесса.
+- Кросс-источниковый запрос в OpenSearch: `user.session.id: <id>` → события из обоих индексов.
+
+### Грабли (P0-02)
+
+- **`ses = 4294967295`** (`auid=unset`, kernel tasks): отфильтровать явно — иначе все неаттрибутированные события получат одинаковый `user.session.id`.
+- **Cold start osquery**: `/proc/<pid>/sessionid` доступен пока процесс жив. Для завершившихся процессов в osquery diff поле просто отсутствует — это корректное поведение.
+- **Нет прогрева кэша**: `ses` читается из каждого auditd-события напрямую; `/proc/<pid>/sessionid` для osquery доступен без LRU. В отличие от `process.parent.entity_id` — здесь нет проблемы cold start.
+- **`btime` переиспользовать**: читается один раз при инициализации скрипта в P0-01 — не читать `/proc/stat` повторно.
+
+---
+
+## P0-03. Замена filebeat на fluent-bit SSH-pipeline
 
 **Приоритет:** P0 (высокий — целевой "clean fluent-bit" стек)
 **Стоимость:** ~1 день
 **Статус:** не начато
+**Зависимости:** —
 **Решения (зафиксированы):**
 
 - Индекс: **`system-auth-YYYY.MM.dd`** (нейтральное имя по содержимому: auth.log содержит не только sshd).
 - Filebeat: **удалить полностью** после миграции — purge пакета через ansible.
 
-### Зачем (P0-02)
+### Зачем (P0-03)
 
 - Убрать последнюю зависимость от Elastic apt-репозитория. После этого весь стек агентов — pure fluent-bit + auditd + osquery, никакой Elastic upstream.
 - Унифицировать модель: единый ECS-enrich через Lua, общий стиль конфигов и метрик health.
 - Снять необходимость поддержки `.deb` filebeat в [fetch-packages](agents/deploy/fetch-packages/).
 - Один эндпойнт мониторинга (fluent-bit metrics на 2020/tcp) вместо двух.
 
-### Что делать (P0-02)
+### Что делать (P0-03)
 
 **1. Новый Lua-enrich:** `agents/configs/fluent-bit/scripts/sshd_enrich.lua`. Распарсить распространённые форматы строк auth.log:
 
@@ -141,13 +202,13 @@ input { tcp { port => 5048 codec => json_lines tags => ["system-auth","fluent-bi
 - README.md: обновить список источников.
 - [dev_stand/scripts/send-sshd.sh](dev_stand/scripts/send-sshd.sh): обновить под новый формат (TCP 5048) либо удалить.
 
-### Точки изменений (P0-02)
+### Точки изменений (P0-03)
 
 - **Новые файлы:** `agents/configs/fluent-bit/scripts/sshd_enrich.lua`.
 - **Правки:** [agents/configs/fluent-bit/parsers.conf](agents/configs/fluent-bit/parsers.conf), [agents/configs/fluent-bit/fluent-bit.conf](agents/configs/fluent-bit/fluent-bit.conf), [logstash/configs/pipeline/ueba-main.conf](logstash/configs/pipeline/ueba-main.conf), [agents/deploy/agents-deploy.yml](agents/deploy/agents-deploy.yml), [agents/deploy/fetch-packages/fetch.ps1](agents/deploy/fetch-packages/fetch.ps1), [CLAUDE.md](CLAUDE.md), [README.md](README.md).
 - **Удалить:** [agents/configs/filebeat/](agents/configs/filebeat/).
 
-### Критерий готовности (P0-02)
+### Критерий готовности (P0-03)
 
 - На test-хосте после прогона `agents-deploy.yml`: `dpkg -l | grep filebeat` пусто, `systemctl status filebeat` → `unit not found`.
 - В fluent-bit `curl http://127.0.0.1:2020/api/v1/metrics` показывает ненулевой счётчик records у tail-input на auth.log.
@@ -155,7 +216,7 @@ input { tcp { port => 5048 codec => json_lines tags => ["system-auth","fluent-bi
 - На beats 5044 (Logstash) больше нет входящего трафика от агентских хостов.
 - Индекс `filebeat-*` перестал расти (последняя дата — момент миграции).
 
-### Грабли (P0-02)
+### Грабли (P0-03)
 
 - **Права на auth.log:** обычно `640 root:adm`. fluent-bit user уже должен быть в группе `adm` для audit.log (см. CLAUDE.md), но проверить per-host.
 - **journald-only дистрибутивы:** на Ubuntu 22.04+ auth.log может быть отключён в пользу journald. Решения: либо включить rsyslog для записи auth.log, либо использовать `[INPUT] systemd` в fluent-bit (другой парсер). Уточнить по факту целевого окружения.
@@ -167,14 +228,14 @@ input { tcp { port => 5048 codec => json_lines tags => ["system-auth","fluent-bi
 
 ---
 
-## P0-03. Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm
+## P0-04. Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm
 
 **Приоритет:** P0 (закрытие современных bypass-векторов)
 **Стоимость:** ~2-3 часа (правила + дополнение SYSCALLS таблицы в enrich + триггер на dev)
 **Статус:** не начато
 **Зависимости:** учитывает корректировки из P1-01 (брать только `io_uring_setup`, обе формы `process_vm_*`).
 
-### Зачем (P0-03)
+### Зачем (P0-04)
 
 Закрывает 4 современных bypass-вектора, которые отсутствуют в текущем [audit.rules](agents/configs/auditd/audit.rules):
 
@@ -183,12 +244,12 @@ input { tcp { port => 5048 codec => json_lines tags => ["system-auth","fluent-bi
 - **memfd_create** — fileless execution (T1620): загрузка бинаря в анонимный файловый дескриптор, exec без диска.
 - **bpf** — атакующий eBPF (rootkit Singularity и аналоги) + сигнал о любой загрузке BPF-программы.
 
-### Что делать (P0-03)
+### Что делать (P0-04)
 
 **1. Добавить в [audit.rules](agents/configs/auditd/audit.rules)** после блока "Подозрительные пути выполнения":
 
 ```text
-# ── Современные bypass-векторы (P0-03) ───────────────────────────────────────
+# ── Современные bypass-векторы (P0-04) ───────────────────────────────────────
 -a always,exit -F arch=b64 -S io_uring_setup -F auid>=1000 -F auid!=unset -k io_uring
 -a always,exit -F arch=b64 -S ptrace -F auid>=1000 -F auid!=unset -k process_injection
 -a always,exit -F arch=b64 -S process_vm_readv,process_vm_writev -F auid>=1000 -F auid!=unset -k process_injection
@@ -227,19 +288,19 @@ elseif sc_name == "io_uring_setup" then
 end
 ```
 
-### Точки изменений (P0-03)
+### Точки изменений (P0-04)
 
 - [agents/configs/auditd/audit.rules](agents/configs/auditd/audit.rules)
 - [agents/configs/fluent-bit/scripts/auditd_enrich.lua](agents/configs/fluent-bit/scripts/auditd_enrich.lua)
 
-### Критерий готовности (P0-03)
+### Критерий готовности (P0-04)
 
 - `auditctl -l | grep -E 'io_uring|ptrace|memfd|bpf'` показывает все 5 правил.
 - Триггер на dev-хосте: `python3 -c "import os; os.memfd_create('x', 0)"` → событие в `fluent-audit-*` с `event.action=memfd_create`, `auditd.key=fileless_exec`.
 - Аналогичные триггеры для остальных ключей (см. P1-04 auditd-trigger.yml) дают корректные `event.action` и `event.category=process`.
 - Объём `audit.log` после включения вырос не более чем на +2-3 % на типичном prod-сервере (на workstation возможен рост до +10 % из-за gdb/strace).
 
-### Грабли (P0-03)
+### Грабли (P0-04)
 
 - **Feedback loop с osquery BPF backend (P2-01).** Когда P2-01 будет включён, osqueryd сам начнёт триггерить `-S bpf` audit-события на свою BPF-загрузку → fluent-bit → snowball. Решение: в audit-правиле для `bpf` добавить `-F exe!=/usr/bin/osqueryd` или фильтр по uid. **Заложить как cross-task требование к P2-01.**
 - **Номера syscall'ов архитектуроспецифичны.** Указанные значения — x86_64. Для arm64 значения другие — но мы пока пишем `-F arch=b64`, который для arm64 матчит aarch64 — таблица номеров на arm64 не совпадёт. Если появятся arm64-хосты, придётся отдельно мапить.
@@ -263,11 +324,11 @@ end
 
 Наш `process_start ↔ Neo23x0 process_creation`, `cron_changes ↔ cron`, `time_change ↔ time+localtime`, `module_load/unload ↔ modules`, `module_changes ↔ modprobe`, `user_changes ↔ etcgroup+etcpasswd`, `pam_changes ↔ pam`, `sudo_changes ↔ actions`, `audit_config_change ↔ auditconfig+audispconfig`, `session_tracking ↔ session`, `socket_connect ↔ network_connect_4/6`, `systemd_changes ↔ systemd`, `socket_create ↔ network_socket_created`.
 
-### Уточнение по P0-03 (io_uring/ptrace/memfd_create/bpf)
+### Уточнение по P0-04 (io_uring/ptrace/memfd_create/bpf)
 
-Neo23x0 подтверждает направление P0-03. Уточнения, которые P0-03 уже учитывает:
+Neo23x0 подтверждает направление P0-04. Уточнения, которые P0-04 уже учитывает:
 
-| Исходный черновик | Neo23x0 | Учтено в P0-03 |
+| Исходный черновик | Neo23x0 | Учтено в P0-04 |
 | --- | --- | --- |
 | `-S io_uring_setup,io_uring_enter,io_uring_register` | `-S io_uring_setup` только | Да — взят только `io_uring_setup`, `enter` создаёт тысячи событий на один setup |
 | `-S process_vm_writev` | `-S process_vm_readv, process_vm_writev` | Да — обе формы добавлены |
@@ -333,7 +394,7 @@ Neo23x0 подтверждает направление P0-03. Уточнени�
 ["282"]="userfaultfd",  ["308"]="setns",
 ["310"]="process_vm_readv", ["311"]="process_vm_writev",
 ["320"]="kexec_file_load",  ["133"]="mknod",   ["259"]="mknodat",
--- уже добавлено в P0-03:
+-- уже добавлено в P0-04:
 ["101"]="ptrace",       ["319"]="memfd_create", ["321"]="bpf",
 ["425"]="io_uring_setup",
 ```
@@ -364,7 +425,7 @@ Neo23x0 подтверждает направление P0-03. Уточнени�
 **Приоритет:** P1 (стабильность маппингов)
 **Стоимость:** ~4 часа (шаблоны + Ansible-task для PUT + проверка на dev-стенде)
 **Статус:** не начато
-**Зависимости:** делать **после** P0-01 (появится `process.entity_id`) и **после** P0-02 (появится индекс `system-auth-*`). Тогда шаблоны пишутся сразу полные.
+**Зависимости:** делать **после** P0-01 (появится `process.entity_id`) и **после** P0-03 (появится индекс `system-auth-*`). Тогда шаблоны пишутся сразу полные.
 
 ### Зачем (P1-02)
 
@@ -382,7 +443,7 @@ Index templates закрывают всё это разом: один JSON на 
 
 - [logstash/configs/templates/fluent-audit.json](logstash/configs/templates/fluent-audit.json) — pattern `fluent-audit-*`, `event.module=auditd` constant_keyword.
 - [logstash/configs/templates/fluent-osquery.json](logstash/configs/templates/fluent-osquery.json) — pattern `fluent-osquery-*`, `event.module=osquery` constant_keyword.
-- [logstash/configs/templates/system-auth.json](logstash/configs/templates/system-auth.json) — pattern `system-auth-*`, `event.module=system` constant_keyword (после P0-02).
+- [logstash/configs/templates/system-auth.json](logstash/configs/templates/system-auth.json) — pattern `system-auth-*`, `event.module=system` constant_keyword (после P0-03).
 - [logstash/configs/templates/suricata.json](logstash/configs/templates/suricata.json) — pattern `suricata-*`, у Suricata своя расширенная ECS — отдельный набор полей.
 
 **2. Критичные поля под UEBA, которые обязательно должны быть явно типизированы:**
@@ -511,7 +572,7 @@ Index templates закрывают всё это разом: один JSON на 
 **Приоритет:** P1 (безопасность канала)
 **Стоимость:** ~1 день (PKI + конфиги обеих сторон + Ansible-роли для распространения сертификатов)
 **Статус:** не начато
-**Зависимости:** имеет смысл делать после P0-02 (миграция filebeat) — все три TCP-входа (5045 audit, 5047 osquery, 5048 system-auth) к этому моменту будут стандартизованы, обернём TLS разом.
+**Зависимости:** имеет смысл делать после P0-03 (миграция filebeat) — все три TCP-входа (5045 audit, 5047 osquery, 5048 system-auth) к этому моменту будут стандартизованы, обернём TLS разом.
 
 ### Зачем (P1-03)
 
@@ -519,7 +580,7 @@ Index templates закрывают всё это разом: один JSON на 
 
 - `5045` (audit ECS)
 - `5047` (osquery ECS)
-- `5048` (system-auth, после P0-02)
+- `5048` (system-auth, после P0-03)
 
 Что это значит на bare-metal флоте:
 
@@ -556,7 +617,7 @@ input {
 }
 ```
 
-То же для 5047 и 5048 (после P0-02).
+То же для 5047 и 5048 (после P0-03).
 
 **3. fluent-bit side.** В [agents/configs/fluent-bit/fluent-bit.conf](agents/configs/fluent-bit/fluent-bit.conf) к каждому `[OUTPUT] tcp` добавить:
 
@@ -612,7 +673,7 @@ input {
 **Приоритет:** P1 (защита от регрессов в правилах + enrich)
 **Стоимость:** ~1 день
 **Статус:** не начато
-**Зависимости:** делать **после** P0-03 и P1-01 (Tier A), чтобы покрыть все ключи разом, а не делать в два этапа.
+**Зависимости:** делать **после** P0-04 и P1-01 (Tier A), чтобы покрыть все ключи разом, а не делать в два этапа.
 
 ### Зачем (P1-04)
 
@@ -633,10 +694,10 @@ input {
 | `python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(1)"` | `socket_bind`, `socket_listen` |
 | `touch /tmp/x; chmod 4755 /tmp/x` | `tmp_write` |
 | `cp /usr/bin/ls /tmp/ls; /tmp/ls` | `suspicious_exec` |
-| `python3 -c "import os; os.memfd_create('x', 0)"` | `fileless_exec` (P0-03) |
-| C-loader для `ptrace(PTRACE_TRACEME, ...)` | `process_injection` (P0-03) |
-| C-loader для `bpf(BPF_PROG_LOAD, ...)` | `ebpf_use` (P0-03) |
-| C-loader для `io_uring_setup` | `io_uring` (P0-03) |
+| `python3 -c "import os; os.memfd_create('x', 0)"` | `fileless_exec` (P0-04) |
+| C-loader для `ptrace(PTRACE_TRACEME, ...)` | `process_injection` (P0-04) |
+| C-loader для `bpf(BPF_PROG_LOAD, ...)` | `ebpf_use` (P0-04) |
+| C-loader для `io_uring_setup` | `io_uring` (P0-04) |
 | Триггеры под Tier A из P1-01 | каждый соответствующий ключ |
 
 **Структура плейбука:**
@@ -772,7 +833,7 @@ ECS-маппинг: `event.module=osquery`, `event.dataset=osquery.bpf_process_e
 - **Версия ядра.** Стабильно 5.15+. На 5.10 BTF может быть собран в дистрибутиве без полного CO-RE — проверить наличие `/sys/kernel/btf/vmlinux` до включения.
 - **Версия osquery.** BPF backend требует osquery ≥ 4.6 (стабильно с 5.0). В [agents/deploy/group_vars/all.yml](agents/deploy/group_vars/all.yml) есть пин-версия — проверить, что мы выше порога.
 - **Capabilities.** osqueryd запускается под root, что покрывает CAP_BPF/CAP_PERFMON. Если в будущем понадобится non-root osqueryd — потребуются явные caps.
-- **Feedback loop с audit-правилом `-S bpf` из P0-03.** osqueryd сам триггерит audit-события на BPF-загрузку → fluent-bit → snowball. Обязательно: в audit-правиле P0-03 для `bpf` добавить `-F exe!=/usr/bin/osqueryd` либо whitelist по uid. Без этого зацикливание гарантировано на старте osqueryd.
+- **Feedback loop с audit-правилом `-S bpf` из P0-04.** osqueryd сам триггерит audit-события на BPF-загрузку → fluent-bit → snowball. Обязательно: в audit-правиле P0-04 для `bpf` добавить `-F exe!=/usr/bin/osqueryd` либо whitelist по uid. Без этого зацикливание гарантировано на старте osqueryd.
 - **Объём.** Скедул интервал 10 сек — баланс между latency и объёмом. На очень busy-хостах (CI runners, kubelet-nodes с ~500 short-lived процессов/мин) может понадобиться увеличить `bpf_buffer_storage_size` или поднять интервал до 30 сек.
 - **Templatize конфига — риск trailing-запятых в JSON.** После `{% endif %}` в JSON легко получить `,}` или `}{` — обязательно прогнать `python -m json.tool` на рендере перед прод-деплоем (или использовать `validate: 'python3 -c "import json; json.load(open(\"%s\"))"'` в Ansible template-task).
 - **`cgroup`/`cid` поля.** В BPF-таблицах есть container_id, но он сырой (full sha256 cgroup-path). Для корректного `container.id` ECS — обрезать до 12-символьного префикса.
