@@ -245,6 +245,15 @@
         mode: "0644"
       notify: restart fluent-bit
 
+    - name: Развернуть общие Lua-утилиты proc_common.lua
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/proc_common.lua
+        dest: /etc/fluent-bit/scripts/proc_common.lua
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fluent-bit
+
     - name: Создать /etc/default/fluent-bit с переменными окружения
       ansible.builtin.template:
         src: ../configs/fluent-bit/fluent-bit.env.j2

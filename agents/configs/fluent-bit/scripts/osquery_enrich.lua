@@ -1,13 +1,9 @@
 -- osquery_enrich.lua
--- Нормализует события osqueryd.results.log в ECS 8.x + osquery.* namespace.
---
--- Входящий record после JSON-парсера:
---   record.name            — имя запроса (processes, listening_ports, ...)
---   record.action          — "added" | "removed"
---   record.hostIdentifier  — hostname из osquery
---   record.unixTime        — unix timestamp (уже используется как time_key)
---   record.columns         — таблица с колонками результата (вложенный объект)
---   record.decorations     — таблица {hostname, osquery_version}
+-- Normalises osqueryd.results.log events to ECS 8.x + osquery.* namespace.
+
+local _dir = (debug.getinfo(1, "S").source or ""):match("^@(.+/)") or ""
+package.path = _dir .. "?.lua;" .. package.path
+local common = require("proc_common")
 
 -- ── Маппинг имени запроса → ECS category / type / action ──────────────────
 local QUERY_META = {
@@ -181,132 +177,9 @@ local QUERY_META = {
     },
 }
 
--- ── Кэш hostname ──────────────────────────────────────────────────────────
-local _hostname = nil
-local function get_hostname()
-    if not _hostname then
-        local f = io.popen("hostname -f 2>/dev/null")
-        if f then
-            _hostname = f:read("*l") or "unknown"
-            f:close()
-        else
-            _hostname = os.getenv("HOSTNAME") or "unknown"
-        end
-    end
-    return _hostname
-end
-
--- ── /proc/<pid>/sessionid → audit session number ────────────────────────
-local function get_sessionid(pid)
-    if not pid or pid <= 0 then return nil end
-    local f = io.open("/proc/" .. tostring(pid) .. "/sessionid", "r")
-    if not f then return nil end
-    local s = f:read("*n")
-    f:close()
-    if not s or s <= 0 or s == 4294967295 then return nil end
-    return s
-end
-
 -- ── Протокол: номер IANA → имя ────────────────────────────────────────────
 local PROTO = { ["6"] = "tcp", ["17"] = "udp", ["1"] = "icmp",
                 ["58"] = "ipv6-icmp", ["132"] = "sctp" }
-
--- ── FNV-1a 64-bit хэш как две FNV-32 ветви на разных offset basis ──
--- Идентичен auditd_enrich.lua — одинаковая формула обеспечивает совпадение
--- process.entity_id для одного процесса в fluent-audit-* и fluent-osquery-*.
-local bit = require("bit")
-local FNV32_PRIME      = 16777619
-local FNV32_OFFSET     = 2166136261
-local FNV32_OFFSET_ALT = 2654435769
-
-local function fnv32(s, seed)
-    local h = seed
-    for i = 1, #s do
-        h = bit.bxor(h, s:byte(i))
-        h = bit.band(h * FNV32_PRIME, 0xFFFFFFFF)
-    end
-    return h
-end
-
-local function short_id(s)
-    local hi = fnv32(s, FNV32_OFFSET)
-    local lo = fnv32(s, FNV32_OFFSET_ALT)
-    return string.format("%08x%08x", hi, lo)
-end
-
--- ── Кэш pid → process.start (epoch seconds) ──
-local PROC_CACHE_MAX   = 10000
-local _proc_cache      = {}
-local _proc_cache_size = 0
-local _btime           = nil
-local _clk_tck         = nil
-
-local function get_btime()
-    if _btime then return _btime end
-    local f = io.open("/proc/stat", "r")
-    if not f then return nil end
-    for line in f:lines() do
-        local b = line:match("^btime%s+(%d+)")
-        if b then _btime = tonumber(b); break end
-    end
-    f:close()
-    return _btime
-end
-
-local function get_clk_tck()
-    if _clk_tck then return _clk_tck end
-    local f = io.popen("getconf CLK_TCK 2>/dev/null")
-    if f then
-        local v = f:read("*l")
-        f:close()
-        _clk_tck = tonumber(v)
-    end
-    _clk_tck = _clk_tck or 100
-    return _clk_tck
-end
-
-local function read_proc_start(pid)
-    local f = io.open("/proc/" .. pid .. "/stat", "r")
-    if not f then return nil end
-    local line = f:read("*l")
-    f:close()
-    if not line then return nil end
-    local tail_idx = line:find("%) ")
-    if not tail_idx then return nil end
-    local tail = line:sub(tail_idx + 2)
-    local fields = {}
-    for w in tail:gmatch("%S+") do fields[#fields+1] = w end
-    local ticks = tonumber(fields[20])
-    if not ticks then return nil end
-    local btime = get_btime()
-    if not btime then return nil end
-    return btime + math.floor(ticks / get_clk_tck())
-end
-
-local function cache_evict_if_full()
-    if _proc_cache_size > PROC_CACHE_MAX then
-        _proc_cache      = {}
-        _proc_cache_size = 0
-    end
-end
-
-local function cache_put(pid, start_ts, force)
-    if force or not _proc_cache[pid] then
-        if not _proc_cache[pid] then
-            _proc_cache_size = _proc_cache_size + 1
-        end
-        _proc_cache[pid] = start_ts
-        cache_evict_if_full()
-    end
-end
-
-local function resolve_start(pid)
-    local s = _proc_cache[pid]
-    if s then return s end
-    s = read_proc_start(pid)
-    if s then cache_put(pid, s, false) end
-    return s
-end
 
 -- ── Главная функция ───────────────────────────────────────────────────────
 function enrich_osquery(tag, timestamp, record)
@@ -316,7 +189,6 @@ function enrich_osquery(tag, timestamp, record)
     local cols       = record["columns"]
     local deco       = record["decorations"]
 
-    -- Без columns — пропускаем (нераспознанный формат)
     if type(cols) ~= "table" then
         return -1, timestamp, record
     end
@@ -330,16 +202,16 @@ function enrich_osquery(tag, timestamp, record)
         os.date("!%Y-%m-%dT%H:%M:%S.000Z", timestamp)
 
     -- ── Host ──────────────────────────────────────────────────────────────
-    -- host.name всегда берём из hostname -f (FQDN) — как в auditd_enrich,
+    -- host.name берём из hostname -f (FQDN) — как в auditd_enrich,
     -- иначе entity_id seed расходится и cross-index корреляция ломается.
     local host_id = record["hostIdentifier"]
         or (deco and deco["hostname"])
-        or get_hostname()
-    record["host.name"]      = get_hostname()
+        or common.get_hostname()
+    record["host.name"]      = common.get_hostname()
     record["host.os.type"]   = "linux"
     record["host.os.family"] = "linux"
 
-    -- ── osquery.result.* — метаданные запроса ─────────────────────────────
+    -- ── osquery.result.* ─────────────────────────────────────────────────
     record["osquery.result.name"]            = query_name
     record["osquery.result.action"]          = action
     record["osquery.result.host_identifier"] = host_id
@@ -365,7 +237,7 @@ function enrich_osquery(tag, timestamp, record)
         record["event.type"]     = "info"
     end
 
-    -- ── Колонки → osquery.<column> (flat, совместимо с Elastic mapping) ───
+    -- ── Колонки → osquery.<column> ────────────────────────────────────────
     for k, v in pairs(cols) do
         if v ~= nil and v ~= "" then
             record["osquery." .. k] = v
@@ -377,135 +249,107 @@ function enrich_osquery(tag, timestamp, record)
        or query_name == "process_open_files" or query_name == "listening_ports" then
 
         local pid = tonumber(cols["pid"])
-        if pid then
+        if pid and pid > 0 then
             record["process.pid"] = pid
 
-            if pid > 0 then
-                local start_ts
-                if query_name == "processes" then
-                    -- processes.start_time: epoch seconds (integer), тот же источник что
-                    -- и /proc/<pid>/stat field 22 + btime в auditd — seed совпадёт.
-                    start_ts = tonumber(cols["start_time"])
-                    if start_ts then
-                        record["process.start"] = start_ts
-                        -- "added" = новый процесс; force=true для PID reuse.
-                        cache_put(pid, start_ts, action == "added")
-                    end
-                else
-                    start_ts = resolve_start(pid)
-                    if start_ts then
-                        record["process.start"] = start_ts
-                    end
-                end
-
+            local start_ts
+            if query_name == "processes" then
+                -- processes.start_time: epoch seconds, same source as /proc/<pid>/stat
+                -- field 22 + btime in auditd → entity_id seed matches.
+                start_ts = tonumber(cols["start_time"])
                 if start_ts then
-                    local seed = (record["host.name"] or "")
-                              .. ":" .. tostring(pid)
-                              .. ":" .. tostring(start_ts)
-                    record["process.entity_id"] = short_id(seed)
+                    record["process.start"] = start_ts
+                    common.cache_put(pid, start_ts, action == "added")
                 end
+            else
+                start_ts = common.resolve_start(pid)
+                if start_ts then
+                    record["process.start"] = start_ts
+                end
+            end
 
-                local ses = get_sessionid(pid)
-                if ses then
-                    local btime = get_btime()
-                    if btime then
-                        record["user.session.id"] = short_id(
-                            (record["host.name"] or "") .. ":" .. tostring(btime) .. ":" .. tostring(ses))
-                    end
-                end
+            if start_ts then
+                local seed = (record["host.name"] or "")
+                          .. ":" .. tostring(pid)
+                          .. ":" .. tostring(start_ts)
+                record["process.entity_id"] = common.short_id(seed)
+            end
+
+            local ses = common.get_sessionid(pid)
+            if ses then
+                local sid = common.make_session_id(record["host.name"] or "", ses)
+                if sid then record["user.session.id"] = sid end
             end
         end
 
         local ppid = tonumber(cols["parent"])
-        if ppid then
+        if ppid and ppid > 0 then
             record["process.parent.pid"] = ppid
-            if ppid > 0 then
-                local parent_start = resolve_start(ppid)
-                if parent_start then
-                    record["process.parent.start"]     = parent_start
-                    local pseed = (record["host.name"] or "")
-                               .. ":" .. tostring(ppid)
-                               .. ":" .. tostring(parent_start)
-                    record["process.parent.entity_id"] = short_id(pseed)
-                end
+            local parent_start = common.resolve_start(ppid)
+            if parent_start then
+                record["process.parent.start"]     = parent_start
+                local pseed = (record["host.name"] or "")
+                           .. ":" .. tostring(ppid)
+                           .. ":" .. tostring(parent_start)
+                record["process.parent.entity_id"] = common.short_id(pseed)
             end
         end
 
-        if cols["name"] then
-            record["process.name"] = cols["name"]
-        end
-        if cols["path"] and cols["path"] ~= "" then
-            record["process.executable"] = cols["path"]
-        end
-        if cols["process_path"] and cols["process_path"] ~= "" then
-            record["process.executable"] = cols["process_path"]
-        end
-        if cols["cmdline"] and cols["cmdline"] ~= "" then
-            record["process.command_line"] = cols["cmdline"]
-        end
-        if cols["process_name"] then
-            record["process.name"] = cols["process_name"]
-        end
+        if cols["name"]         then record["process.name"] = cols["name"] end
+        if cols["process_name"] then record["process.name"] = cols["process_name"] end
+        if cols["path"]         and cols["path"] ~= ""         then record["process.executable"] = cols["path"] end
+        if cols["process_path"] and cols["process_path"] ~= "" then record["process.executable"] = cols["process_path"] end
+        if cols["cmdline"]      and cols["cmdline"] ~= ""      then record["process.command_line"] = cols["cmdline"] end
     end
 
-    -- user.session.id для logged_in_users (cols.pid = shell сессии)
-    -- Остальные запросы с pid получают session id внутри process-блока выше.
+    -- user.session.id для logged_in_users (cols.pid = PID shell сессии)
     if query_name == "logged_in_users" then
         local pid = tonumber(cols["pid"])
         if pid and pid > 0 then
-            local ses = get_sessionid(pid)
+            local ses = common.get_sessionid(pid)
             if ses then
-                local btime = get_btime()
-                if btime then
-                    record["user.session.id"] = short_id(
-                        (record["host.name"] or "") .. ":" .. tostring(btime) .. ":" .. tostring(ses))
-                end
+                local sid = common.make_session_id(record["host.name"] or "", ses)
+                if sid then record["user.session.id"] = sid end
             end
         end
     end
 
     -- ── ECS user ──────────────────────────────────────────────────────────
     local username = cols["username"] or cols["user"]
-    if username and username ~= "" then
-        record["user.name"] = username
-    end
+    if username and username ~= "" then record["user.name"] = username end
     local uid = cols["uid"]
-    if uid and uid ~= "" then
-        record["user.id"] = uid
-    end
+    if uid and uid ~= "" then record["user.id"] = uid end
 
-    -- ── ECS network (process_connections, listening_ports) ────────────────
+    -- ── ECS network ───────────────────────────────────────────────────────
     if query_name == "process_connections" then
         if cols["remote_address"] and cols["remote_address"] ~= "" then
-            record["destination.ip"]   = cols["remote_address"]
+            record["destination.ip"] = cols["remote_address"]
         end
         if cols["remote_port"] then
             record["destination.port"] = tonumber(cols["remote_port"])
         end
         if cols["local_address"] and cols["local_address"] ~= "" then
-            record["source.ip"]   = cols["local_address"]
+            record["source.ip"] = cols["local_address"]
         end
         if cols["local_port"] then
             record["source.port"] = tonumber(cols["local_port"])
         end
         local proto = cols["protocol"]
         if proto then
-            record["network.transport"] = PROTO[proto] or proto
+            record["network.transport"]   = PROTO[proto] or proto
             record["network.iana_number"] = proto
         end
     end
 
     if query_name == "listening_ports" then
-        if cols["port"] then
-            record["destination.port"] = tonumber(cols["port"])
+        if cols["port"]    then record["destination.port"] = tonumber(cols["port"]) end
+        if cols["address"] and cols["address"] ~= "" then
+            record["destination.ip"] = cols["address"]
         end
         local proto = cols["protocol"]
         if proto then
-            record["network.transport"] = PROTO[proto] or proto
+            record["network.transport"]   = PROTO[proto] or proto
             record["network.iana_number"] = proto
-        end
-        if cols["address"] and cols["address"] ~= "" then
-            record["destination.ip"] = cols["address"]
         end
     end
 

@@ -1,6 +1,9 @@
 -- auditd_enrich.lua
--- Обогащает объединённую запись auditd полями ECS (Elastic Common Schema 8.x)
--- и добавляет MITRE ATT&CK теги для распространённых TTP.
+-- Enriches merged auditd records with ECS 8.x fields.
+
+local _dir = (debug.getinfo(1, "S").source or ""):match("^@(.+/)") or ""
+package.path = _dir .. "?.lua;" .. package.path
+local common = require("proc_common")
 
 -- ── Таблица syscall number -> имя (Linux x86_64) ──
 local SYSCALLS = {
@@ -39,9 +42,7 @@ local EVENT_CATEGORY = {
 }
 
 -- ── MITRE ATT&CK теги по syscall ──
--- Отключено: поля threat.* семантически предназначены для алертов (Elastic Security),
--- а не для raw-событий. Для UEBA-скоринга использовать отдельную аннотацию.
--- Для включения: раскомментировать таблицу и блок применения ниже.
+-- Отключено: threat.* предназначен для алертов, не для raw-событий.
 --[[
 local MITRE_TAGS = {
     execve    = {"T1059",     "Execution: Command and Scripting Interpreter"},
@@ -65,7 +66,7 @@ local MITRE_TAGS = {
 -- Возвращает: net_type ("ipv4"|"ipv6"|"unix"|nil), ip, port
 local function decode_saddr(saddr)
     if not saddr or #saddr < 4 then return nil, nil, nil end
-    local family = tonumber(saddr:sub(1, 2), 16)  -- младший байт family (LE)
+    local family = tonumber(saddr:sub(1, 2), 16)
     if family == 2 and #saddr >= 16 then           -- AF_INET
         local port = tonumber(saddr:sub(5, 8), 16)
         local a = tonumber(saddr:sub(9,  10), 16)
@@ -90,119 +91,6 @@ local function decode_saddr(saddr)
     return nil, nil, nil
 end
 
--- ── FNV-1a 64-bit хэш как две FNV-32 ветви на разных offset basis ──
--- LuaJIT bit module: 32-bit unsigned операции; два независимых FNV-32 = 64 бита уникальности.
-local bit = require("bit")
-local FNV32_PRIME      = 16777619
-local FNV32_OFFSET     = 2166136261
-local FNV32_OFFSET_ALT = 2654435769
-
-local function fnv32(s, seed)
-    local h = seed
-    for i = 1, #s do
-        h = bit.bxor(h, s:byte(i))
-        h = bit.band(h * FNV32_PRIME, 0xFFFFFFFF)
-    end
-    return h
-end
-
-local function short_id(s)
-    local hi = fnv32(s, FNV32_OFFSET)
-    local lo = fnv32(s, FNV32_OFFSET_ALT)
-    return string.format("%08x%08x", hi, lo)
-end
-
--- ── Кэш pid → process.start (epoch seconds) ──
-local PROC_CACHE_MAX   = 10000
-local _proc_cache      = {}
-local _proc_cache_size = 0
-local _btime           = nil
-local _clk_tck         = nil
-
-local function get_btime()
-    if _btime then return _btime end
-    local f = io.open("/proc/stat", "r")
-    if not f then return nil end
-    for line in f:lines() do
-        local b = line:match("^btime%s+(%d+)")
-        if b then _btime = tonumber(b); break end
-    end
-    f:close()
-    return _btime
-end
-
-local function get_clk_tck()
-    if _clk_tck then return _clk_tck end
-    local f = io.popen("getconf CLK_TCK 2>/dev/null")
-    if f then
-        local v = f:read("*l")
-        f:close()
-        _clk_tck = tonumber(v)
-    end
-    _clk_tck = _clk_tck or 100
-    return _clk_tck
-end
-
--- Читает starttime из /proc/<pid>/stat field 22, конвертирует в epoch seconds.
--- Ищем последнюю ') ' — comm может содержать пробелы и скобки.
-local function read_proc_start(pid)
-    local f = io.open("/proc/" .. pid .. "/stat", "r")
-    if not f then return nil end
-    local line = f:read("*l")
-    f:close()
-    if not line then return nil end
-    local tail_idx = line:find("%) ")
-    if not tail_idx then return nil end
-    local tail = line:sub(tail_idx + 2)
-    local fields = {}
-    for w in tail:gmatch("%S+") do fields[#fields+1] = w end
-    local ticks = tonumber(fields[20])  -- field 22 в полной строке = field 20 в tail
-    if not ticks then return nil end
-    local btime = get_btime()
-    if not btime then return nil end
-    return btime + math.floor(ticks / get_clk_tck())
-end
-
-local function cache_evict_if_full()
-    if _proc_cache_size > PROC_CACHE_MAX then
-        _proc_cache      = {}
-        _proc_cache_size = 0
-    end
-end
-
-local function cache_put(pid, start_ts, force)
-    if force or not _proc_cache[pid] then
-        if not _proc_cache[pid] then
-            _proc_cache_size = _proc_cache_size + 1
-        end
-        _proc_cache[pid] = start_ts
-        cache_evict_if_full()
-    end
-end
-
-local function resolve_start(pid)
-    local s = _proc_cache[pid]
-    if s then return s end
-    s = read_proc_start(pid)
-    if s then cache_put(pid, s, false) end
-    return s
-end
-
--- ── Кэш hostname ──
-local _hostname = nil
-local function get_hostname()
-    if not _hostname then
-        local f = io.popen("hostname -f 2>/dev/null")
-        if f then
-            _hostname = f:read("*l") or "unknown"
-            f:close()
-        else
-            _hostname = os.getenv("HOSTNAME") or "unknown"
-        end
-    end
-    return _hostname
-end
-
 -- ── Конвертация Unix mode в строку (rwxr-xr-x) ──
 local function mode_to_str(mode_oct)
     if not mode_oct then return nil end
@@ -210,8 +98,8 @@ local function mode_to_str(mode_oct)
     local bits = "rwxrwxrwx"
     local result = ""
     for i = 1, 9 do
-        local bit = math.floor(m / (2^(9-i))) % 2
-        result = result .. (bit == 1 and bits:sub(i,i) or "-")
+        local b = math.floor(m / (2^(9-i))) % 2
+        result = result .. (b == 1 and bits:sub(i,i) or "-")
     end
     return result
 end
@@ -227,7 +115,7 @@ function enrich_ecs(tag, timestamp, record)
         os.date("!%Y-%m-%dT%H:%M:%S.000Z", timestamp)
 
     -- ── Хост ──
-    record["host.name"]      = get_hostname()
+    record["host.name"]      = common.get_hostname()
     record["host.os.type"]   = "linux"
     record["host.os.family"] = "linux"
 
@@ -260,14 +148,11 @@ function enrich_ecs(tag, timestamp, record)
         -- process.start + process.entity_id
         local start_ts
         if is_execve then
-            -- На execve процесс только что родился; force=true перезаписывает кэш
-            -- на случай PID reuse (умерший процесс мог занимать тот же pid).
-            start_ts = read_proc_start(pid) or record["@timestamp"]
-            cache_put(pid, start_ts, true)
+            start_ts = common.read_proc_start(pid) or record["@timestamp"]
+            common.cache_put(pid, start_ts, true)
         else
-            start_ts = resolve_start(pid)
+            start_ts = common.resolve_start(pid)
             if not start_ts then
-                -- Процесс уже исчез из /proc (короткоживущий или exit-событие).
                 start_ts = record["@timestamp"]
                 record["labels.entity_id_source"] = "event_timestamp_fallback"
             end
@@ -276,19 +161,19 @@ function enrich_ecs(tag, timestamp, record)
         local seed = (record["host.name"] or "")
                   .. ":" .. tostring(pid)
                   .. ":" .. tostring(start_ts)
-        record["process.entity_id"] = short_id(seed)
+        record["process.entity_id"] = common.short_id(seed)
     end
 
     local ppid = tonumber(record["ppid"])
     if ppid then
         record["process.parent.pid"] = ppid
-        local parent_start = resolve_start(ppid)
+        local parent_start = common.resolve_start(ppid)
         if parent_start then
             record["process.parent.start"]     = parent_start
             local pseed = (record["host.name"] or "")
                        .. ":" .. tostring(ppid)
                        .. ":" .. tostring(parent_start)
-            record["process.parent.entity_id"] = short_id(pseed)
+            record["process.parent.entity_id"] = common.short_id(pseed)
         end
     end
 
@@ -305,18 +190,15 @@ function enrich_ecs(tag, timestamp, record)
     local uid = record["uid"]
     if uid then
         record["user.id"] = uid
-        -- uid_name: kernel-resolved username, сохранён merge-скриптом из UID="..." в raw-логе
         if record["uid_name"] then record["user.name"] = record["uid_name"] end
     end
 
-    -- auid = audit user id (реальный пользователь до su/sudo)
     local auid = record["auid"]
     if auid and auid ~= "4294967295" and auid ~= "-1" then
         record["user.effective.id"] = auid
         if record["auid_name"] then record["user.effective.name"] = record["auid_name"] end
     end
 
-    -- user_acct присутствует в USER_* событиях — перекрывает
     if record["user_acct"] then
         record["user.name"] = record["user_acct"]
     end
@@ -359,7 +241,6 @@ function enrich_ecs(tag, timestamp, record)
             record["event.category"] = "iam"
         end
 
-        -- MITRE ATT&CK (отключено, см. комментарий у таблицы MITRE_TAGS выше)
         --[[
         local mitre = MITRE_TAGS[sc_name]
         if mitre then
@@ -405,9 +286,6 @@ function enrich_ecs(tag, timestamp, record)
         local net_type, ip, port = decode_saddr(saddr_hex)
         if net_type == "ipv4" or net_type == "ipv6" then
             local action = record["event.action"]
-            -- connect: saddr = удалённый адрес → destination
-            -- bind:    saddr = локальный адрес → destination (порт, который слушаем)
-            -- accept/accept4: saddr = адрес клиента → source
             if action == "accept" or action == "accept4" then
                 record["source.ip"]   = ip
                 record["source.port"] = port
@@ -439,11 +317,8 @@ function enrich_ecs(tag, timestamp, record)
     local ses = tonumber(record["ses"] or record["user_ses"])
     if ses and ses > 0 and ses ~= 4294967295 then
         record["auditd.session"] = ses
-        local btime = get_btime()
-        if btime then
-            record["user.session.id"] = short_id(
-                (record["host.name"] or "") .. ":" .. tostring(btime) .. ":" .. tostring(ses))
-        end
+        local sid = common.make_session_id(record["host.name"] or "", ses)
+        if sid then record["user.session.id"] = sid end
     end
 
     -- ── Теги ──
