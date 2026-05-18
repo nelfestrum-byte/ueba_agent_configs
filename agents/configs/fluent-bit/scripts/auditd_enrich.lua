@@ -437,6 +437,11 @@ function enrich_ecs(tag, timestamp, record)
     local ses = tonumber(record["ses"])
     if ses and ses > 0 and ses ~= 4294967295 then
         record["auditd.session"] = ses
+        local btime = get_btime()
+        if btime then
+            record["user.session.id"] = short_id(
+                (record["host.name"] or "") .. ":" .. tostring(btime) .. ":" .. tostring(ses))
+        end
     end
 
     -- ── Теги ──

@@ -196,6 +196,17 @@ local function get_hostname()
     return _hostname
 end
 
+-- ── /proc/<pid>/sessionid → audit session number ────────────────────────
+local function get_sessionid(pid)
+    if not pid or pid <= 0 then return nil end
+    local f = io.open("/proc/" .. tostring(pid) .. "/sessionid", "r")
+    if not f then return nil end
+    local s = f:read("*n")
+    f:close()
+    if not s or s <= 0 or s == 4294967295 then return nil end
+    return s
+end
+
 -- ── Протокол: номер IANA → имя ────────────────────────────────────────────
 local PROTO = { ["6"] = "tcp", ["17"] = "udp", ["1"] = "icmp",
                 ["58"] = "ipv6-icmp", ["132"] = "sctp" }
@@ -392,6 +403,15 @@ function enrich_osquery(tag, timestamp, record)
                               .. ":" .. tostring(pid)
                               .. ":" .. tostring(start_ts)
                     record["process.entity_id"] = short_id(seed)
+                end
+
+                local ses = get_sessionid(pid)
+                if ses then
+                    local btime = get_btime()
+                    if btime then
+                        record["user.session.id"] = short_id(
+                            (record["host.name"] or "") .. ":" .. tostring(btime) .. ":" .. tostring(ses))
+                    end
                 end
             end
         end
