@@ -1,24 +1,3 @@
-## /etc/audit/rules.d/ueba.rules
-## Правила auditd для UEBA (production, bare-metal Debian)
-## Стек: auditd → fluent-bit (merge+enrich Lua) → Logstash → OpenSearch (fluent-audit-*)
-##
-## Установка:
-##   1. Скопировать файл в /etc/audit/rules.d/ueba.rules
-##      (рекомендуется единственный файл правил, чтобы избежать конфликтов с
-##       поставляемыми augenrules при `apt install auditd`).
-##   2. augenrules --load          # сборка /etc/audit/audit.rules + загрузка
-##   3. systemctl enable --now auditd
-##   4. auditctl -s                # проверить enabled=1, backlog, lost
-##
-## /etc/audit/auditd.conf — обязательные настройки для fluent-bit merge-скрипта:
-##   end_of_event_timeout = 2   (генерирует EOE-записи — маркер конца набора)
-##   log_format = ENRICHED      (обогащённый формат с именами пользователей)
-##   log_group = adm            (fluent-bit читает через группу adm)
-##
-## Доступ к /var/log/audit/audit.log для fluent-bit:
-##   usermod -aG adm fluent-bit && systemctl restart auditd
-##   или: setfacl -m u:fluent-bit:r /var/log/audit/audit.log
-
 # Очистить ранее загруженные правила (на старте — обязательная директива)
 -D
 
