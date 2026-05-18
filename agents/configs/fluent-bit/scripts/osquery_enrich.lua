@@ -448,6 +448,22 @@ function enrich_osquery(tag, timestamp, record)
         end
     end
 
+    -- user.session.id для logged_in_users (cols.pid = shell сессии)
+    -- Остальные запросы с pid получают session id внутри process-блока выше.
+    if query_name == "logged_in_users" then
+        local pid = tonumber(cols["pid"])
+        if pid and pid > 0 then
+            local ses = get_sessionid(pid)
+            if ses then
+                local btime = get_btime()
+                if btime then
+                    record["user.session.id"] = short_id(
+                        (record["host.name"] or "") .. ":" .. tostring(btime) .. ":" .. tostring(ses))
+                end
+            end
+        end
+    end
+
     -- ── ECS user ──────────────────────────────────────────────────────────
     local username = cols["username"] or cols["user"]
     if username and username ~= "" then

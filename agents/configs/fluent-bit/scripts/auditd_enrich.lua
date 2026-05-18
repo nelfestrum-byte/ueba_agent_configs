@@ -434,7 +434,9 @@ function enrich_ecs(tag, timestamp, record)
     end
 
     -- ── Сессия auditd ──
-    local ses = tonumber(record["ses"])
+    -- USER_* события мержатся с префиксом user_* (merge.lua:122-126),
+    -- поэтому ses из USER_LOGIN/USER_AUTH/USER_LOGOUT лежит в user_ses.
+    local ses = tonumber(record["ses"] or record["user_ses"])
     if ses and ses > 0 and ses ~= 4294967295 then
         record["auditd.session"] = ses
         local btime = get_btime()
