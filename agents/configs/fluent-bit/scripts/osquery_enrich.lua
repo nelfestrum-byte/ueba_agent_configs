@@ -319,10 +319,12 @@ function enrich_osquery(tag, timestamp, record)
         os.date("!%Y-%m-%dT%H:%M:%S.000Z", timestamp)
 
     -- ── Host ──────────────────────────────────────────────────────────────
+    -- host.name всегда берём из hostname -f (FQDN) — как в auditd_enrich,
+    -- иначе entity_id seed расходится и cross-index корреляция ломается.
     local host_id = record["hostIdentifier"]
         or (deco and deco["hostname"])
         or get_hostname()
-    record["host.name"]      = host_id
+    record["host.name"]      = get_hostname()
     record["host.os.type"]   = "linux"
     record["host.os.family"] = "linux"
 

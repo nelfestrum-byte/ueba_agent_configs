@@ -60,6 +60,36 @@ local MITRE_TAGS = {
 }
 --]]
 
+-- ── Декодирование saddr (hex sockaddr из SOCKADDR-записи auditd) ──
+-- saddr — hex-дамп struct sockaddr. Первые 2 байта = family (LE на x86_64).
+-- Возвращает: net_type ("ipv4"|"ipv6"|"unix"|nil), ip, port
+local function decode_saddr(saddr)
+    if not saddr or #saddr < 4 then return nil, nil, nil end
+    local family = tonumber(saddr:sub(1, 2), 16)  -- младший байт family (LE)
+    if family == 2 and #saddr >= 16 then           -- AF_INET
+        local port = tonumber(saddr:sub(5, 8), 16)
+        local a = tonumber(saddr:sub(9,  10), 16)
+        local b = tonumber(saddr:sub(11, 12), 16)
+        local c = tonumber(saddr:sub(13, 14), 16)
+        local d = tonumber(saddr:sub(15, 16), 16)
+        if a and b and c and d and port then
+            return "ipv4", string.format("%d.%d.%d.%d", a, b, c, d), port
+        end
+    elseif family == 10 and #saddr >= 48 then      -- AF_INET6
+        local port = tonumber(saddr:sub(5, 8), 16)
+        local parts = {}
+        for i = 0, 7 do
+            parts[i+1] = saddr:sub(17 + i*4, 20 + i*4)
+        end
+        if port then
+            return "ipv6", table.concat(parts, ":"), port
+        end
+    elseif family == 1 then                        -- AF_UNIX
+        return "unix", nil, nil
+    end
+    return nil, nil, nil
+end
+
 -- ── FNV-1a 64-bit хэш как две FNV-32 ветви на разных offset basis ──
 -- LuaJIT bit module: 32-bit unsigned операции; два независимых FNV-32 = 64 бита уникальности.
 local bit = require("bit")
@@ -367,6 +397,28 @@ function enrich_ecs(tag, timestamp, record)
         if #path_list > 1 then
             record["auditd.paths"] = path_list
         end
+    end
+
+    -- ── Сетевой адрес из SOCKADDR ──
+    local saddr_hex = record["socket_saddr"]
+    if saddr_hex then
+        local net_type, ip, port = decode_saddr(saddr_hex)
+        if net_type == "ipv4" or net_type == "ipv6" then
+            local action = record["event.action"]
+            -- connect: saddr = удалённый адрес → destination
+            -- bind:    saddr = локальный адрес → destination (порт, который слушаем)
+            -- accept/accept4: saddr = адрес клиента → source
+            if action == "accept" or action == "accept4" then
+                record["source.ip"]   = ip
+                record["source.port"] = port
+            else
+                record["destination.ip"]   = ip
+                record["destination.port"] = port
+            end
+            record["network.type"] = net_type
+        end
+        record["socket_saddr"]  = nil
+        record["socket_family"] = nil
     end
 
     -- ── Рабочая директория ──
