@@ -77,12 +77,16 @@ auditd перехватывает системные вызовы на уров�
 | `host.os.type` | keyword | всегда | `"linux"` |
 | `process.pid` | integer | при syscall | PID процесса |
 | `process.parent.pid` | integer | при syscall | PPID |
+| `process.entity_id` | keyword | если pid > 0 | Стабильный ID процесса: FNV-1a hash(host.name:pid:start_time), 16 hex. Одинаков для всех событий одного процесса; переключается при PID reuse. Источник: `/proc/<pid>/stat` field 22 + btime. |
+| `process.parent.entity_id` | keyword | если ppid резолвирован | ID родительского процесса. Может отсутствовать сразу после рестарта fluent-bit пока родитель не появится в `/proc` или кэше. |
+| `process.start` | long | если pid > 0 | Время старта процесса, epoch seconds (btime + floor(starttime_ticks / CLK_TCK)). Совпадает с `osquery.processes.start_time`. |
 | `process.name` | keyword | при syscall | имя процесса (comm) |
 | `process.executable` | keyword | при syscall | полный путь (exe) |
 | `process.command_line` | keyword | при execve | командная строка |
 | `process.args` | keyword[] | при execve | аргументы (массив) |
 | `process.args_count` | integer | при execve | количество аргументов |
 | `process.working_directory` | keyword | при CWD | рабочая директория |
+| `labels.entity_id_source` | keyword | при fallback | `event_timestamp_fallback` — процесс исчез из `/proc` до enrich (exit-событие короткоживущего); entity_id такого события **не совпадёт** с osquery. |
 | `user.id` | keyword | всегда | UID процесса |
 | `user.name` | keyword | если известен | имя пользователя (uid_name или user_acct) |
 | `user.effective.id` | keyword | если auid ≠ -1 | audit UID (реальный до sudo) |
@@ -297,6 +301,11 @@ CA и self-signed сертификаты из системного хранил�
 | `event.type` | start / end / change / creation / deletion / access / info |
 | `host.name` | hostname хоста |
 | `host.os.type` | `"linux"` |
+| `process.pid` | PID (для запросов processes, process_connections, process_open_files, listening_ports) |
+| `process.entity_id` | Стабильный ID процесса, 16 hex. **Совпадает** с `process.entity_id` в auditd для того же процесса — одинаковая формула FNV-1a(host.name:pid:start_time). Источник start_time: `processes.start_time` (epoch seconds из osquery) или `/proc/<pid>/stat` на cache miss. |
+| `process.parent.entity_id` | ID родительского процесса; отсутствует если родитель не резолвирован. |
+| `process.start` | Старт процесса, epoch seconds. Для таблицы `processes` = `cols.start_time`. Для остальных — из кэша или `/proc`. |
+| `process.parent.start` | Старт родительского процесса, epoch seconds. |
 | `osquery.result.name` | имя запроса (processes, listening_ports, ...) |
 | `osquery.result.action` | added / removed |
 | `osquery.result.host_identifier` | hostname из osquery |
@@ -344,10 +353,13 @@ CA и self-signed сертификаты из системного хранил�
 | Имя пользователя | `user.name` | все источники |
 | Реальный пользователь (до sudo) | `user.effective.id` | auditd (auid) |
 | Хост | `host.name` | все источники |
-| Процесс | `process.pid` + `host.name` | auditd, osquery |
+| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed |
+| Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
 | Исходный IP (SSH) | `source.ip` | filebeat, osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections |
 | Команда | `process.command_line` | auditd (execve), osquery processes |
+
+> **Кросс-источниковый join auditd ↔ osquery по `process.entity_id` корректен** при условии, что оба enrich-скрипта используют одинаковую формулу: `FNV-1a(host.name + ":" + pid + ":" + start_time)`, где `start_time` берётся из `/proc/<pid>/stat field 22 + btime` (целое число, epoch seconds). Для exit-событий короткоживущих процессов поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует, что entity_id в этом документе **не совпадёт** с osquery.
 
 ---
 

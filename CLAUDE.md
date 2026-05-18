@@ -105,8 +105,8 @@ ueba-stand/
 | **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch |
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd pipeline: tail → merge → enrich → TCP 5045 |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
-| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены — для scoring-надпроекта) |
-| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace |
+| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id` |
+| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd |
 | **Конфиг filebeat** | `agents/configs/filebeat/filebeat.yml.j2` | только system/auth (SSH auth.log) |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + filebeat + osquery |
@@ -219,6 +219,16 @@ auditd **4.0+** не пишет `type=EOE` в `/var/log/audit/audit.log` — в 
 ```bash
 curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 ```
+
+### pid→start_time кэш в enrich-скриптах (холодный старт)
+`auditd_enrich.lua` и `osquery_enrich.lua` держат in-memory кэш `pid → start_time`. Кэш **теряется при рестарте fluent-bit**. Сразу после старта:
+- `process.parent.entity_id` отсутствует для процессов, чьи родители ещё не встречались в потоке событий (родитель жив, но его execve fluent-bit пропустил).
+- Для долгоживущих процессов enrich обратится в `/proc/<pid>/stat` напрямую — это работает, пока процесс жив.
+
+Размер кэша ограничен 10 000 записей; при превышении кэш сбрасывается целиком (bulk eviction).
+
+### exit-события короткоживущих процессов
+Если процесс завершился до того, как enrich обработал его exit-событие, `/proc/<pid>/stat` уже недоступен и кэша нет → `start_time` берётся из `@timestamp` события. Поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует об этом. `process.entity_id` такого события **не совпадёт** с osquery — это known limitation.
 
 ---
 

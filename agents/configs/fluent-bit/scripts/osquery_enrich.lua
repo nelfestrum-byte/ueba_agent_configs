@@ -200,6 +200,103 @@ end
 local PROTO = { ["6"] = "tcp", ["17"] = "udp", ["1"] = "icmp",
                 ["58"] = "ipv6-icmp", ["132"] = "sctp" }
 
+-- ── FNV-1a 64-bit хэш как две FNV-32 ветви на разных offset basis ──
+-- Идентичен auditd_enrich.lua — одинаковая формула обеспечивает совпадение
+-- process.entity_id для одного процесса в fluent-audit-* и fluent-osquery-*.
+local bit = require("bit")
+local FNV32_PRIME      = 16777619
+local FNV32_OFFSET     = 2166136261
+local FNV32_OFFSET_ALT = 2654435769
+
+local function fnv32(s, seed)
+    local h = seed
+    for i = 1, #s do
+        h = bit.bxor(h, s:byte(i))
+        h = bit.band(h * FNV32_PRIME, 0xFFFFFFFF)
+    end
+    return h
+end
+
+local function short_id(s)
+    local hi = fnv32(s, FNV32_OFFSET)
+    local lo = fnv32(s, FNV32_OFFSET_ALT)
+    return string.format("%08x%08x", hi, lo)
+end
+
+-- ── Кэш pid → process.start (epoch seconds) ──
+local PROC_CACHE_MAX   = 10000
+local _proc_cache      = {}
+local _proc_cache_size = 0
+local _btime           = nil
+local _clk_tck         = nil
+
+local function get_btime()
+    if _btime then return _btime end
+    local f = io.open("/proc/stat", "r")
+    if not f then return nil end
+    for line in f:lines() do
+        local b = line:match("^btime%s+(%d+)")
+        if b then _btime = tonumber(b); break end
+    end
+    f:close()
+    return _btime
+end
+
+local function get_clk_tck()
+    if _clk_tck then return _clk_tck end
+    local f = io.popen("getconf CLK_TCK 2>/dev/null")
+    if f then
+        local v = f:read("*l")
+        f:close()
+        _clk_tck = tonumber(v)
+    end
+    _clk_tck = _clk_tck or 100
+    return _clk_tck
+end
+
+local function read_proc_start(pid)
+    local f = io.open("/proc/" .. pid .. "/stat", "r")
+    if not f then return nil end
+    local line = f:read("*l")
+    f:close()
+    if not line then return nil end
+    local tail_idx = line:find("%) ")
+    if not tail_idx then return nil end
+    local tail = line:sub(tail_idx + 2)
+    local fields = {}
+    for w in tail:gmatch("%S+") do fields[#fields+1] = w end
+    local ticks = tonumber(fields[20])
+    if not ticks then return nil end
+    local btime = get_btime()
+    if not btime then return nil end
+    return btime + math.floor(ticks / get_clk_tck())
+end
+
+local function cache_evict_if_full()
+    if _proc_cache_size > PROC_CACHE_MAX then
+        _proc_cache      = {}
+        _proc_cache_size = 0
+    end
+end
+
+local function cache_put(pid, start_ts, force)
+    if force or not _proc_cache[pid] then
+        if not _proc_cache[pid] then
+            _proc_cache_size = _proc_cache_size + 1
+        end
+        _proc_cache[pid] = start_ts
+        cache_evict_if_full()
+    end
+end
+
+local function resolve_start(pid)
+    local s = _proc_cache[pid]
+    if s then return s end
+    s = read_proc_start(pid)
+    if s then cache_put(pid, s, false) end
+    return s
+end
+
 -- ── Главная функция ───────────────────────────────────────────────────────
 function enrich_osquery(tag, timestamp, record)
 
@@ -268,12 +365,50 @@ function enrich_osquery(tag, timestamp, record)
 
         local pid = tonumber(cols["pid"])
         if pid then
-            record["process.pid"]  = pid
+            record["process.pid"] = pid
+
+            if pid > 0 then
+                local start_ts
+                if query_name == "processes" then
+                    -- processes.start_time: epoch seconds (integer), тот же источник что
+                    -- и /proc/<pid>/stat field 22 + btime в auditd — seed совпадёт.
+                    start_ts = tonumber(cols["start_time"])
+                    if start_ts then
+                        record["process.start"] = start_ts
+                        -- "added" = новый процесс; force=true для PID reuse.
+                        cache_put(pid, start_ts, action == "added")
+                    end
+                else
+                    start_ts = resolve_start(pid)
+                    if start_ts then
+                        record["process.start"] = start_ts
+                    end
+                end
+
+                if start_ts then
+                    local seed = (record["host.name"] or "")
+                              .. ":" .. tostring(pid)
+                              .. ":" .. tostring(start_ts)
+                    record["process.entity_id"] = short_id(seed)
+                end
+            end
         end
+
         local ppid = tonumber(cols["parent"])
         if ppid then
             record["process.parent.pid"] = ppid
+            if ppid > 0 then
+                local parent_start = resolve_start(ppid)
+                if parent_start then
+                    record["process.parent.start"]     = parent_start
+                    local pseed = (record["host.name"] or "")
+                               .. ":" .. tostring(ppid)
+                               .. ":" .. tostring(parent_start)
+                    record["process.parent.entity_id"] = short_id(pseed)
+                end
+            end
         end
+
         if cols["name"] then
             record["process.name"] = cols["name"]
         end
