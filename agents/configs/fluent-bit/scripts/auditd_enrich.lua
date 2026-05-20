@@ -141,6 +141,7 @@ function enrich_ecs(tag, timestamp, record)
     if pid then
         record["process.pid"]          = pid
         record["process.name"]         = record["comm"]
+        if record["comm"] then common.cache_put_name(pid, record["comm"]) end
         record["process.executable"]   = record["exe"]
         record["process.title"]        = record["proctitle"]
         record["process.command_line"] = record["proctitle"]
@@ -166,7 +167,9 @@ function enrich_ecs(tag, timestamp, record)
 
     local ppid = tonumber(record["ppid"])
     if ppid then
-        record["process.parent.pid"] = ppid
+        record["process.parent.pid"]  = ppid
+        local parent_name = common.resolve_name(ppid)
+        if parent_name then record["process.parent.name"] = parent_name end
         local parent_start = common.resolve_start(ppid)
         if parent_start then
             record["process.parent.start"]     = parent_start

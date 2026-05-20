@@ -33,6 +33,8 @@ local _hostname = nil
 local PROC_CACHE_MAX   = 10000
 local _proc_cache      = {}
 local _proc_cache_size = 0
+local _name_cache      = {}
+local _name_cache_size = 0
 
 -- ── /proc helpers ────────────────────────────────────────────────────────────
 
@@ -103,6 +105,29 @@ function M.resolve_start(pid)
     s = M.read_proc_start(pid)
     if s then M.cache_put(pid, s, false) end
     return s
+end
+
+function M.cache_put_name(pid, name)
+    if not _name_cache[pid] then
+        _name_cache_size = _name_cache_size + 1
+    end
+    _name_cache[pid] = name
+    if _name_cache_size > PROC_CACHE_MAX then
+        _name_cache      = {}
+        _name_cache_size = 0
+    end
+end
+
+-- Returns process name for pid: from cache first, then /proc/<pid>/comm.
+function M.resolve_name(pid)
+    local n = _name_cache[pid]
+    if n then return n end
+    local f = io.open("/proc/" .. tostring(pid) .. "/comm", "r")
+    if not f then return nil end
+    n = f:read("*l")
+    f:close()
+    if n then M.cache_put_name(pid, n) end
+    return n
 end
 
 function M.get_hostname()
