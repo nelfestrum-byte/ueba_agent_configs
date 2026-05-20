@@ -132,6 +132,15 @@ function M.resolve_name(pid)
     return n
 end
 
+-- Converts epoch-seconds integer to ISO 8601 date string for ECS date fields.
+-- Passes through strings unchanged (e.g. @timestamp fallback already ISO).
+function M.to_iso(ts)
+    if type(ts) == "number" then
+        return os.date("!%Y-%m-%dT%H:%M:%S.000Z", ts)
+    end
+    return ts
+end
+
 function M.cache_put_cmdline(pid, cmdline)
     if not _cmdline_cache[pid] then
         _cmdline_cache_size = _cmdline_cache_size + 1

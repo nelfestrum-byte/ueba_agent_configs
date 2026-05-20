@@ -264,14 +264,10 @@ function enrich_osquery(tag, timestamp, record)
                 -- field 22 + btime in auditd → entity_id seed matches.
                 start_ts = tonumber(cols["start_time"])
                 if start_ts then
-                    record["process.start"] = start_ts
                     common.cache_put(pid, start_ts, action == "added")
                 end
             else
                 start_ts = common.resolve_start(pid)
-                if start_ts then
-                    record["process.start"] = start_ts
-                end
             end
 
             if start_ts then
@@ -279,6 +275,7 @@ function enrich_osquery(tag, timestamp, record)
                           .. ":" .. tostring(pid)
                           .. ":" .. tostring(start_ts)
                 record["process.entity_id"] = common.short_id(seed)
+                record["process.start"]     = common.to_iso(start_ts)
             end
 
             local ses = common.get_sessionid(pid)
@@ -293,11 +290,11 @@ function enrich_osquery(tag, timestamp, record)
             record["process.parent.pid"] = ppid
             local parent_start = common.resolve_start(ppid)
             if parent_start then
-                record["process.parent.start"]     = parent_start
                 local pseed = (record["host.name"] or "")
                            .. ":" .. tostring(ppid)
                            .. ":" .. tostring(parent_start)
                 record["process.parent.entity_id"] = common.short_id(pseed)
+                record["process.parent.start"]     = common.to_iso(parent_start)
             end
         end
 

@@ -158,11 +158,11 @@ function enrich_ecs(tag, timestamp, record)
                 record["labels.entity_id_source"] = "event_timestamp_fallback"
             end
         end
-        record["process.start"] = start_ts
         local seed = (record["host.name"] or "")
                   .. ":" .. tostring(pid)
                   .. ":" .. tostring(start_ts)
         record["process.entity_id"] = common.short_id(seed)
+        record["process.start"]     = common.to_iso(start_ts)
     end
 
     local ppid = tonumber(record["ppid"])
@@ -174,11 +174,11 @@ function enrich_ecs(tag, timestamp, record)
         if parent_cmdline then record["process.parent.command_line"] = parent_cmdline end
         local parent_start = common.resolve_start(ppid)
         if parent_start then
-            record["process.parent.start"]     = parent_start
             local pseed = (record["host.name"] or "")
                        .. ":" .. tostring(ppid)
                        .. ":" .. tostring(parent_start)
             record["process.parent.entity_id"] = common.short_id(pseed)
+            record["process.parent.start"]     = common.to_iso(parent_start)
         end
     end
 
