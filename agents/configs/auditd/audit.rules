@@ -18,6 +18,7 @@
 -a never,exit -F arch=b64 -S epoll_wait -S epoll_pwait
 -a never,exit -F arch=b64 -S getpid -S gettid -S clock_gettime
 -a never,exit -F arch=b64 -S recvmsg -F uid=root
+-a never,exit -F arch=b64 -S socket -S bind -S listen -S connect -S accept -S accept4 -F exe=/opt/fluent-bit/bin/fluent-bit
 
 # ── Запуск процессов (execve) ────────────────────────────────────────────────
 -a always,exit -F arch=b64 -S execve -k process_start

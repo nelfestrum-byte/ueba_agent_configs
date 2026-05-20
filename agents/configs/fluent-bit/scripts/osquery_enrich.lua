@@ -193,6 +193,12 @@ function enrich_osquery(tag, timestamp, record)
         return -1, timestamp, record
     end
 
+    if query_name == "process_connections"
+       and (cols["process_path"] == "/opt/fluent-bit/bin/fluent-bit"
+            or cols["process_name"] == "fluent-bit") then
+        return -1, timestamp, record
+    end
+
     -- ── ECS базовые поля ──────────────────────────────────────────────────
     record["ecs.version"]   = "8.11"
     record["event.kind"]    = "event"
