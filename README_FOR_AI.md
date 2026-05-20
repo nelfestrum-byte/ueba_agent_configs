@@ -56,7 +56,7 @@ auditd перехватывает системные вызовы на уров�
 2. **auditd_enrich.lua** — нормализует объединённую запись в ECS:
    - syscall number → имя (`SYSCALLS` таблица, x86_64)
    - `event.category`, `event.type`, `event.action` по типу события
-   - `process.*` из полей pid/ppid/comm/exe/proctitle/_execve_args; `process.parent.name` из кэша `pid→name` или `/proc/<ppid>/comm`
+   - `process.*` из полей pid/ppid/comm/exe/proctitle/_execve_args; `process.parent.name` и `process.parent.command_line` из кэшей `pid→name`/`pid→cmdline` или `/proc/<ppid>/comm` и `/proc/<ppid>/cmdline`
    - `user.id` из uid, `user.effective.id` из auid (реальный пользователь до sudo)
    - `file.*` из PATH-записей auditd
    - `event.outcome`: success / failure из syscall_success
@@ -78,6 +78,7 @@ auditd перехватывает системные вызовы на уров�
 | `process.pid` | integer | при syscall | PID процесса |
 | `process.parent.pid` | integer | при syscall | PPID |
 | `process.parent.name` | keyword | если ppid жив или в кэше | Имя родительского процесса (comm, max 15 символов). Берётся из кэша `pid→name` (заполняется при обработке событий родителя), при cache miss — из `/proc/<ppid>/comm`. Отсутствует если родитель завершился до enrich и не попал в кэш. |
+| `process.parent.command_line` | keyword | если ppid жив или в кэше | Командная строка родительского процесса. Берётся из кэша `pid→cmdline` (заполняется из `process.command_line` текущего процесса после обработки execve-аргументов), при cache miss — из `/proc/<ppid>/cmdline` (null-байты заменены пробелами). Отсутствует если родитель завершился до enrich и не попал в кэш. |
 | `process.entity_id` | keyword | если pid > 0 | Стабильный ID процесса: FNV-1a hash(host.name:pid:start_time), 16 hex. Одинаков для всех событий одного процесса; переключается при PID reuse. Источник: `/proc/<pid>/stat` field 22 + btime. |
 | `process.parent.entity_id` | keyword | если ppid резолвирован | ID родительского процесса. Может отсутствовать сразу после рестарта fluent-bit пока родитель не появится в `/proc` или кэше. |
 | `process.start` | long | если pid > 0 | Время старта процесса, epoch seconds (btime + floor(starttime_ticks / CLK_TCK)). Совпадает с `osquery.processes.start_time`. |

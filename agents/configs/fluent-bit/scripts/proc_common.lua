@@ -35,6 +35,8 @@ local _proc_cache      = {}
 local _proc_cache_size = 0
 local _name_cache      = {}
 local _name_cache_size = 0
+local _cmdline_cache      = {}
+local _cmdline_cache_size = 0
 
 -- ── /proc helpers ────────────────────────────────────────────────────────────
 
@@ -128,6 +130,32 @@ function M.resolve_name(pid)
     f:close()
     if n then M.cache_put_name(pid, n) end
     return n
+end
+
+function M.cache_put_cmdline(pid, cmdline)
+    if not _cmdline_cache[pid] then
+        _cmdline_cache_size = _cmdline_cache_size + 1
+    end
+    _cmdline_cache[pid] = cmdline
+    if _cmdline_cache_size > PROC_CACHE_MAX then
+        _cmdline_cache      = {}
+        _cmdline_cache_size = 0
+    end
+end
+
+-- Returns command line for pid: from cache first, then /proc/<pid>/cmdline.
+-- /proc/<pid>/cmdline args are null-separated; returned as space-joined string.
+function M.resolve_cmdline(pid)
+    local c = _cmdline_cache[pid]
+    if c then return c end
+    local f = io.open("/proc/" .. tostring(pid) .. "/cmdline", "r")
+    if not f then return nil end
+    local data = f:read("*a")
+    f:close()
+    if not data or #data == 0 then return nil end
+    c = data:gsub("%z", " "):gsub("%s+$", "")
+    if #c > 0 then M.cache_put_cmdline(pid, c) end
+    return c
 end
 
 function M.get_hostname()

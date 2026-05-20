@@ -170,6 +170,8 @@ function enrich_ecs(tag, timestamp, record)
         record["process.parent.pid"]  = ppid
         local parent_name = common.resolve_name(ppid)
         if parent_name then record["process.parent.name"] = parent_name end
+        local parent_cmdline = common.resolve_cmdline(ppid)
+        if parent_cmdline then record["process.parent.command_line"] = parent_cmdline end
         local parent_start = common.resolve_start(ppid)
         if parent_start then
             record["process.parent.start"]     = parent_start
@@ -187,6 +189,11 @@ function enrich_ecs(tag, timestamp, record)
         if not record["process.command_line"] then
             record["process.command_line"] = table.concat(record["_execve_args"], " ")
         end
+    end
+
+    -- Cache command line after all sources are resolved (proctitle + execve args)
+    if pid and record["process.command_line"] then
+        common.cache_put_cmdline(pid, record["process.command_line"])
     end
 
     -- ── Пользователь ──
