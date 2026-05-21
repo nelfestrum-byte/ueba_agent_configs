@@ -235,7 +235,7 @@
       "interval": 300,
       "removed": false,
       "description": "Non-standard shared objects mmap'd by processes — injection detection (P2-02)"
-    }{% if osquery_profile == 'workstation' %},
+    }{% if osquery_profile | default('') == 'workstation' %},
 
     "chrome_extensions_diff": {
       "query": "SELECT uid, name, version, identifier, path FROM users CROSS JOIN chrome_extensions USING (uid);",
