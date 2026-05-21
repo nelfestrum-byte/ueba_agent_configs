@@ -7,18 +7,30 @@
 - [CLAUDE.md](../CLAUDE.md) — навигатор по проекту.
 - [README_FOR_AI.md](../README_FOR_AI.md), раздел 4 — текущая схема osquery-источника. Эта задача добавит две новые event-driven таблицы (`bpf_process_events`, `bpf_socket_events`) — README_FOR_AI обязан остаться источником истины.
 - [HARDENING_PLAN.md, раздел P2-01](HARDENING_PLAN.md) — обоснование, требования к ядру, переключение per-host, грабли.
+- [CONTAINER_BEHAVIOR_PLAN.md](../CONTAINER_BEHAVIOR_PLAN.md) — **родительский документ этой задачи**: план поведенческой модели контейнеров. Эта итерация реализует Направление 1 (источники). Все новые поля, вводимые здесь, должны соответствовать схеме из раздела 3.1 этого документа.
 
 ## Цель итерации
 
-Активировать event-driven таблицы osquery через `--enable_bpf_events=true` **на docker-хостах**. На рабочих станциях — НЕ включать (overhead не оправдан без контейнеров). Toggle реализуется через Ansible-переменную и Jinja-template osquery-конфига.
+Заложить фундамент **поведенческой модели Docker-контейнеров** (см. [CONTAINER_BEHAVIOR_PLAN.md](../CONTAINER_BEHAVIOR_PLAN.md)):
+
+1. Активировать event-driven таблицы osquery через `--enable_bpf_events=true` **на docker-хостах** — получить надёжный источник процессов и соединений с нативным `container.id`.
+2. Добавить таблицу `docker_containers` в расписание osquery — inventory запущенных контейнеров с diff.
+3. В `osquery_enrich.lua` сформировать поля `container.name`, `container.image.name`, `container.entity_id` — ключ сущности для UEBA-скоринга.
+
+На рабочих станциях BPF НЕ включать (overhead не оправдан без контейнеров). Toggle реализуется через Ansible-переменную и Jinja-template osquery-конфига.
 
 **Value сразу:**
 
-- Container-aware видимость на docker-хостах: eBPF читает namespace'ы, чего auditd не умеет.
-- Второй независимый источник process+socket событий — кросс-сверка с auditd (расхождение само по себе сигнал).
+- Каждый процесс и сетевое соединение внутри контейнера получают `container.id` нативно — без polling gap и без ненадёжного `/proc/<pid>/cgroup` lookup.
+- `container.entity_id = host.name:container.name` — стабильный ключ сущности, переживающий рестарты контейнера.
+- Второй независимый источник process+socket событий — кросс-сверка с auditd (расхождение само по себе сигнал аномалии).
 - Более точный `process.start_time` из kernel monotonic clock — улучшает стабильность `process.entity_id` (если P0-01 сделан).
 
 **Независимая ценность:** даже без P0-03 / P1-01 — на docker-хостах появляется container-aware видимость, которой раньше не было.
+
+**ECS-примечания:**
+- `container.entity_id` — кастомное расширение ECS (аналог `process.entity_id`, которое есть в стандарте). Задокументировать в README_FOR_AI как extension.
+- Образ контейнера: **`container.image.name`** (не `container.image`) — стандарт ECS 8.x.
 
 ## Вопросы перед стартом
 
@@ -106,7 +118,21 @@
 
 (Сохрани точно тот же набор `options`, что в оригинальном конфиге; добавь только три новых ключа под `{% if %}`.)
 
-**В секции `schedule` в конец** (перед `}`):
+**В секции `schedule` в конец** (перед `}`), два блока:
+
+**1. docker_containers — всегда на docker-хостах** (не только при BPF):
+
+```jinja
+  {% if osquery_bpf_events_enabled | default(false) %},
+  "docker_containers": {
+    "query": "SELECT id, name, image, image_id, status, pid, (SELECT hostname FROM system_info) AS hostname FROM docker_containers WHERE status = 'running'",
+    "interval": 30,
+    "description": "Running container inventory diff (P2-01)"
+  }
+  {% endif %}
+```
+
+**2. BPF event-driven таблицы** (только при enable_bpf_events):
 
 ```jinja
   {% if osquery_bpf_events_enabled | default(false) %},
@@ -257,7 +283,17 @@ elseif name == "bpf_processes" then
 
     -- container.id из cid (cgroup-path hash → берём первые 12 hex)
     if cols["cid"] and cols["cid"] ~= "" then
-        record["container.id"] = string.sub(cols["cid"], 1, 12)
+        local cid = string.sub(cols["cid"], 1, 12)
+        record["container.id"] = cid
+        -- Резолвинг container.name и container.image.name из кэша docker_containers
+        -- (кэш заполняется при обработке events от таблицы docker_containers)
+        local meta = container_cache[cid]
+        if meta then
+            record["container.name"]       = meta.name
+            record["container.image.name"] = meta.image  -- ECS 8.x: container.image.name, не container.image
+            local hostname = record["host.name"] or ""
+            record["container.entity_id"] = hostname .. ":" .. meta.name
+        end
     end
 
     -- Если P0-01 сделан, обновить cache_put/short_id с использованием ntime как start_time
@@ -280,6 +316,36 @@ elseif name == "bpf_sockets" then
     if cols["local_port"]     then record["source.port"] = tonumber(cols["local_port"]) end
     if cols["remote_address"] then record["destination.ip"]   = cols["remote_address"] end
     if cols["remote_port"]    then record["destination.port"] = tonumber(cols["remote_port"]) end
+
+elseif name == "docker_containers" then
+    -- Заполняем container_cache: cid[12] → {name, image}
+    -- Используется bpf_processes/bpf_sockets для резолвинга container.name и container.image.name
+    record["event.category"]  = "host"
+    record["event.dataset"]   = "osquery.docker_containers"
+    record["event.action"]    = (action == "added") and "container_started" or "container_stopped"
+    record["event.type"]      = (action == "added") and "start" or "end"
+
+    if cols["id"] and cols["name"] then
+        local cid = string.sub(cols["id"], 1, 12)
+        if action == "added" then
+            container_cache[cid] = { name = cols["name"], image = cols["image"] or "" }
+        else
+            container_cache[cid] = nil
+        end
+        record["container.id"]         = cid
+        record["container.name"]        = cols["name"]
+        record["container.image.name"]  = cols["image"] or ""  -- ECS 8.x: container.image.name
+        local hostname = record["host.name"] or ""
+        record["container.entity_id"]  = hostname .. ":" .. cols["name"]
+    end
+    if cols["status"] then record["container.runtime"] = "docker" end
+```
+
+Перед первым `elseif` добавить объявление кэша на уровне модуля (один раз при загрузке скрипта):
+
+```lua
+-- in-memory кэш container_id[12] → {name, image} для резолвинга в bpf_* событиях
+local container_cache = {}
 ```
 
 **Сверь** с реальным синтаксисом текущего `osquery_enrich.lua` — вставь в правильное место (where `name == "..."` branches are). Если P0-01 не сделан — пропусти `short_id`/`cache_put` блок.
@@ -357,7 +423,12 @@ ansible workstation-test -m shell -a "grep -c enable_bpf_events /etc/osquery/osq
 
 ## Финал
 
-1. **Обновить [README_FOR_AI.md](../README_FOR_AI.md):**
+1. **Обновить [CONTAINER_BEHAVIOR_PLAN.md](../CONTAINER_BEHAVIOR_PLAN.md):**
+   - В разделе "Порядок реализации" отметить Неделю 1 как выполненную.
+   - В разделе "Зависимости" обновить статус P2-01.
+   - В разделе 3.1 уточнить, что `container.entity_id` — кастомное расширение ECS, задокументированное в README_FOR_AI.md.
+
+2. **Обновить [README_FOR_AI.md](../README_FOR_AI.md):**
    - В разделе 4 ("Источник: osquery") добавить под-раздел "4.5 BPF backend (event-driven, только docker-хосты)":
      - Список двух таблиц: `bpf_process_events`, `bpf_socket_events`.
      - Гарантированные ECS-поля: тот же базовый блок + `container.id` для events внутри контейнеров.
