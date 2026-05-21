@@ -90,6 +90,13 @@ ueba-stand/
 │       ├── send-sshd.sh
 │       └── send-osquery.sh
 │
+├── opensearch/
+│   └── templates/
+│       ├── fluent-audit.json            — шаблон индекса fluent-audit-* (ECS 8.11)
+│       ├── fluent-osquery.json          — шаблон индекса fluent-osquery-* + osquery.* namespace
+│       ├── filebeat-auth.json           — шаблон индекса filebeat-* (временный, приоритет 50)
+│       └── README.md                   — инструкция по применению (curl + PowerShell)
+│
 ├── README.md
 └── .gitignore
 ```
@@ -112,6 +119,7 @@ ueba-stand/
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + filebeat + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb |
 | **Dev-стенд** | `dev_stand/docker-compose.yml` | Локальный прогон без агентов |
+| **Index templates** | `opensearch/templates/*.json` | Маппинги ECS 8.11 для всех индексов; применяются вручную через REST API |
 
 ## Индексы OpenSearch
 
@@ -177,6 +185,13 @@ ueba-stand/
 4. cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 ```
 
+### Применить index templates на новом стенде
+```
+1. Открыть opensearch/templates/README.md — там curl и PowerShell команды
+2. Применить перед первой отправкой событий (иначе ip-поля замапятся как keyword)
+3. Проверить: curl -u admin:pass 'http://opensearch:9200/_cat/templates?v&name=fluent-*'
+```
+
 ## Команды для быстрого старта
 
 ```bash
@@ -240,5 +255,5 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ---
 
-**Последнее обновление:** 2026-05-18
+**Последнее обновление:** 2026-05-20
 **Версия проекта:** auditd+fluent-bit+osquery (основной стек) + filebeat [временный] → Logstash → OpenSearch

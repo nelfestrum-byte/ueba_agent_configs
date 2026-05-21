@@ -1,0 +1,141 @@
+{
+  "index_patterns": ["fluent-osquery-*"],
+  "priority": 200,
+  "_meta": {
+    "description": "UEBA osquery diff events — ECS 8.11 + osquery.* namespace",
+    "source": "ueba-stand/opensearch/templates",
+    "version": "1.0"
+  },
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.refresh_interval": "5s",
+      "index.mapping.total_fields.limit": 2000
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "ecs": {
+          "properties": {
+            "version": { "type": "keyword" }
+          }
+        },
+        "event": {
+          "properties": {
+            "kind":     { "type": "keyword" },
+            "dataset":  { "type": "keyword" },
+            "module":   { "type": "keyword" },
+            "category": { "type": "keyword" },
+            "type":     { "type": "keyword" },
+            "action":   { "type": "keyword" },
+            "outcome":  { "type": "keyword" },
+            "severity": { "type": "long" }
+          }
+        },
+        "host": {
+          "properties": {
+            "name":     { "type": "keyword" },
+            "hostname": { "type": "keyword" },
+            "os": {
+              "properties": {
+                "type":    { "type": "keyword" },
+                "family":  { "type": "keyword" },
+                "name":    { "type": "keyword" },
+                "version": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "pid":          { "type": "integer" },
+            "name":         { "type": "keyword" },
+            "executable":   { "type": "wildcard" },
+            "command_line": { "type": "wildcard" },
+            "entity_id":    { "type": "keyword" },
+            "start":        { "type": "date" },
+            "parent": {
+              "properties": {
+                "pid":       { "type": "integer" },
+                "entity_id": { "type": "keyword" },
+                "start":     { "type": "date" }
+              }
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "id":   { "type": "keyword" },
+            "name": { "type": "keyword" },
+            "session": {
+              "properties": {
+                "id": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "file": {
+          "properties": {
+            "path": { "type": "wildcard" },
+            "name": { "type": "keyword" }
+          }
+        },
+        "network": {
+          "properties": {
+            "transport":   { "type": "keyword" },
+            "type":        { "type": "keyword" },
+            "direction":   { "type": "keyword" },
+            "protocol":    { "type": "keyword" },
+            "iana_number": { "type": "keyword" }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip":      { "type": "ip" },
+            "port":    { "type": "integer" },
+            "address": { "type": "keyword" }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip":      { "type": "ip" },
+            "port":    { "type": "integer" },
+            "address": { "type": "keyword" }
+          }
+        },
+        "osquery": {
+          "properties": {
+            "result": {
+              "properties": {
+                "name":            { "type": "keyword" },
+                "action":          { "type": "keyword" },
+                "host_identifier": { "type": "keyword" },
+                "unix_time":       { "type": "long" },
+                "version":         { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "labels": {
+          "properties": {
+            "entity_id_source": { "type": "keyword" }
+          }
+        },
+        "tags": { "type": "keyword" }
+      }
+    }
+  }
+}

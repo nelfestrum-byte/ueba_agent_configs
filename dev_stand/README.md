@@ -33,10 +33,14 @@ bash scripts/send-osquery.sh   # osquery diff → порт 5048
 После отправки откройте Dashboards → Dev Tools:
 
 ```
-GET /process-events-*/_search?size=3
-GET /auth-events-*/_search?size=3
-GET /host-metrics-*/_search?size=3
+GET /fluent-audit-*/_search?size=3
+GET /fluent-osquery-*/_search?size=3
+GET /filebeat-*/_search?size=3
 ```
+
+> **Index templates**: перед первой отправкой событий рекомендуется применить шаблоны
+> из `../opensearch/templates/` — иначе поля `source.ip`/`destination.ip` могут
+> замапиться как `keyword` вместо `ip`.
 
 ## Остановка
 

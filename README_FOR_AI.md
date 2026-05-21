@@ -406,3 +406,19 @@ CA и self-signed сертификаты из системного хранил�
 | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг |
 | `logstash/configs/pipeline/ueba-main.conf` | Входящие порты, type-cast, индексы |
 | `agents/configs/auditd/audit.rules` | Что именно перехватывает auditd (фильтр событий) |
+| `opensearch/templates/fluent-audit.json` | Точные типы ECS-полей в auditd-индексе (`wildcard`, `ip`, `date`, `integer`) |
+| `opensearch/templates/fluent-osquery.json` | Типы полей osquery-индекса + `osquery.result.*` namespace |
+
+---
+
+## 9. OpenSearch маппинги — что важно для запросов
+
+При построении UEBA-запросов учитывать типы полей из шаблонов (`opensearch/templates/`):
+
+- `source.ip`, `destination.ip` → тип `ip`: поддерживают CIDR (`source.ip: 10.0.0.0/8`)
+- `process.command_line`, `process.executable`, `file.path` → тип `wildcard`: glob-поиск (`*bash -c*`)
+- `process.start`, `process.parent.start` → тип `date` (ISO 8601 строки): date range и date math работают корректно
+- `process.pid`, `destination.port`, `auditd.session` → тип `integer`: числовые range-запросы
+- все прочие строки → тип `keyword`: точный match и `terms` aggregation, без full-text поиска
+
+Для cross-index join auditd ↔ osquery использовать `process.entity_id` (keyword) и `user.session.id` (keyword) — оба поля одинаково заполняются в обоих источниках.

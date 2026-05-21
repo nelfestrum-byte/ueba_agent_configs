@@ -181,10 +181,29 @@ curl -s 'http://opensearch:9200/_cat/indices?v&index=fluent-*,filebeat-*' | sort
 
 ---
 
+## OpenSearch Index Templates
+
+Готовые шаблоны индексов лежат в [`opensearch/templates/`](opensearch/templates/):
+
+| Шаблон | Index Pattern |
+|--------|---------------|
+| `fluent-audit.json` | `fluent-audit-*` |
+| `fluent-osquery.json` | `fluent-osquery-*` |
+| `filebeat-auth.json` | `filebeat-*` |
+
+Применяются вручную через OpenSearch REST API. Инструкция: [`opensearch/templates/README.md`](opensearch/templates/README.md).
+
+```bash
+# Пример применения одного шаблона:
+curl -u admin:password -X PUT "https://opensearch:9200/_index_template/fluent-audit" \
+  -H "Content-Type: application/json" --data-binary @opensearch/templates/fluent-audit.json
+```
+
+---
+
 ## Известные ограничения
 
 - **auditd 4.x**: не пишет `type=EOE` в audit.log. `auditd_merge.lua` использует wall-clock timeout (не EOE) для флаша буфера.
 - **TLS не настроен**: fluent-bit → Logstash по TCP без шифрования. Для прода использовать beats-протокол с mTLS.
 - **CA-сертификат** не хранится в git — положить вручную перед деплоем Logstash.
 - **Офлайн-пакеты** (`*.deb`) не хранятся в git — перезапустить `fetch.ps1` при смене версий.
-- **ECS index templates**: для прода рекомендуется явно задать маппинги для `process.args[]`, `user.id`, `file.hash.*`.

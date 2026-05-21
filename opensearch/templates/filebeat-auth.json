@@ -1,0 +1,79 @@
+{
+  "index_patterns": ["filebeat-*"],
+  "priority": 50,
+  "_meta": {
+    "description": "UEBA filebeat SSH auth events — minimal ECS mapping (временный компонент)",
+    "source": "ueba-stand/opensearch/templates",
+    "version": "1.0",
+    "note": "Priority 50 — lower than filebeat auto-generated template (100). Active only if filebeat template not applied (e.g. new stand before first filebeat run)."
+  },
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "ecs": {
+          "properties": {
+            "version": { "type": "keyword" }
+          }
+        },
+        "event": {
+          "properties": {
+            "kind":     { "type": "keyword" },
+            "dataset":  { "type": "keyword" },
+            "module":   { "type": "keyword" },
+            "category": { "type": "keyword" },
+            "type":     { "type": "keyword" },
+            "action":   { "type": "keyword" },
+            "outcome":  { "type": "keyword" }
+          }
+        },
+        "host": {
+          "properties": {
+            "name":     { "type": "keyword" },
+            "hostname": { "type": "keyword" }
+          }
+        },
+        "user": {
+          "properties": {
+            "id":   { "type": "keyword" },
+            "name": { "type": "keyword" }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip":      { "type": "ip" },
+            "port":    { "type": "integer" },
+            "address": { "type": "keyword" },
+            "geo": {
+              "properties": {
+                "city_name":        { "type": "keyword" },
+                "country_name":     { "type": "keyword" },
+                "country_iso_code": { "type": "keyword" },
+                "region_name":      { "type": "keyword" },
+                "location":         { "type": "geo_point" }
+              }
+            }
+          }
+        },
+        "tags": { "type": "keyword" }
+      }
+    }
+  }
+}
