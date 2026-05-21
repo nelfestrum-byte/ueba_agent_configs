@@ -6,10 +6,26 @@ package.path = _dir .. "?.lua;" .. package.path
 local common = require("proc_common")
 
 -- in-memory кэш container_id[12] → {name, image} для резолвинга container.name
--- в bpf_process_events / bpf_socket_events (cid поле osquery).
+-- в bpf_process_events / bpf_socket_events.
 -- Заполняется при обработке событий от таблицы docker_containers.
 -- Кэш теряется при рестарте fluent-bit.
 local container_cache = {}
+
+-- Читает /proc/<pid>/cgroup и возвращает первые 12 символов Docker container ID.
+-- cgroup v2: "0::/system.slice/docker-<hex>.scope"
+-- cgroup v1: ".../docker/<hex>"
+-- Возвращает nil если процесс не в Docker-контейнере или файл недоступен.
+local function get_docker_cid(pid)
+    if not pid or pid == "" then return nil end
+    local f = io.open("/proc/" .. tostring(pid) .. "/cgroup", "r")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    local cid = content:match("docker%-(%x+)%.scope")
+    if not cid then cid = content:match("/docker/(%x+)") end
+    if cid and #cid >= 12 then return string.sub(cid, 1, 12) end
+    return nil
+end
 
 -- ── Маппинг имени запроса → ECS category / type / action ──────────────────
 local QUERY_META = {
@@ -520,9 +536,10 @@ function enrich_osquery(tag, timestamp, record)
             record["process.entity_id"] = common.short_id(seed)
         end
 
-        -- container resolution из cid (первые 12 hex из cgroup-path hash)
-        if cols["cid"] and cols["cid"] ~= "" then
-            local cid = string.sub(cols["cid"], 1, 12)
+        -- container resolution через /proc/<pid>/cgroup → Docker short ID
+        -- cols["cid"] — cgroup namespace inode (число), не Docker ID, не используем
+        local cid = get_docker_cid(cols["pid"])
+        if cid then
             record["container.id"] = cid
             local meta = container_cache[cid]
             if meta then
@@ -571,9 +588,9 @@ function enrich_osquery(tag, timestamp, record)
             record["destination.port"] = tonumber(cols["remote_port"])
         end
 
-        -- container resolution
-        if cols["cid"] and cols["cid"] ~= "" then
-            local cid = string.sub(cols["cid"], 1, 12)
+        -- container resolution через /proc/<pid>/cgroup → Docker short ID
+        local cid = get_docker_cid(cols["pid"])
+        if cid then
             record["container.id"] = cid
             local meta = container_cache[cid]
             if meta then
