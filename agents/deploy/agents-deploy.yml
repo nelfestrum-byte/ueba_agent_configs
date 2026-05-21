@@ -97,6 +97,20 @@
         update_cache: true
       when: use_local_packages | default(false)
 
+    - name: Собрать факты об установленных пакетах (офлайн)
+      ansible.builtin.package_facts:
+        manager: apt
+      when: use_local_packages | default(false)
+
+    - name: Проверить актуальность установленных версий .deb пакетов
+      ansible.builtin.set_fact:
+        _debs_install_needed: >-
+          {{
+            (ansible_facts.packages.get('fluent-bit', [{}])[0].get('version', '') is not search('^' + fluent_bit_version))
+            or (ansible_facts.packages.get('osquery', [{}])[0].get('version', '') is not search('^' + osquery_version))
+          }}
+      when: use_local_packages | default(false)
+
     - name: Скопировать локальные .deb на целевые хосты
       ansible.builtin.copy:
         src: "files/{{ item }}"
@@ -105,7 +119,7 @@
       loop:
         - "{{ fluent_bit_local_deb }}"
         - "{{ osquery_local_deb }}"
-      when: use_local_packages | default(false)
+      when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
 
     - name: Установить fluent-bit, osquery из локальных .deb
       ansible.builtin.apt:
@@ -113,7 +127,7 @@
       loop:
         - "{{ fluent_bit_local_deb }}"
         - "{{ osquery_local_deb }}"
-      when: use_local_packages | default(false)
+      when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
 
     - name: Удалить временные .deb файлы
       ansible.builtin.file:
@@ -122,7 +136,7 @@
       loop:
         - "{{ fluent_bit_local_deb }}"
         - "{{ osquery_local_deb }}"
-      when: use_local_packages | default(false)
+      when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
 
     # ── 4. auditd — конфигурация ───────────────────────────────────────────────
 
