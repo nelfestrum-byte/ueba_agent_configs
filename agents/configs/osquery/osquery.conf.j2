@@ -252,7 +252,7 @@
     }{% endif %}{% if osquery_bpf_events_enabled | default(false) %},
 
     "docker_containers": {
-      "query": "SELECT id, name, image, image_id, status, pid, (SELECT hostname FROM system_info) AS hostname FROM docker_containers WHERE status = 'running'",
+      "query": "SELECT id, name, image, image_id, state, status, pid, (SELECT hostname FROM system_info) AS hostname FROM docker_containers WHERE state = 'running'",
       "interval": 30,
       "description": "Running container inventory diff (P2-01)"
     },

@@ -537,9 +537,10 @@ function enrich_osquery(tag, timestamp, record)
         record["event.dataset"] = "osquery.bpf_socket_events"
         if cols["pid"]    then record["process.pid"] = tonumber(cols["pid"]) end
 
-        -- action из subfield (bind/connect/accept) переопределяет QUERY_META default
-        if cols["action"] and cols["action"] ~= "" then
-            record["event.action"] = "socket_" .. cols["action"]
+        -- syscall (bind/connect/accept) переопределяет QUERY_META default
+        local syscall = cols["syscall"] or cols["action"]
+        if syscall and syscall ~= "" then
+            record["event.action"] = "socket_" .. syscall
         end
 
         -- family: AF_INET=2 → ipv4, AF_INET6=10 → ipv6
