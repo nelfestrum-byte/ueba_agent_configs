@@ -488,27 +488,32 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 - `action: added` → `event.action: process_started`, `event.dataset: osquery.bpf_process_events`
 - `action: removed` → `event.action: process_stopped`
 - ECS: `process.pid`, `process.parent.pid`, `process.executable`, `process.command_line`, `user.id`, `user.group.id`, `process.exit_code`
-- `container.id` из `cid` (первые 12 hex); `container.name`, `container.image.name`, `container.entity_id` — резолвятся из `container_cache` (заполняется docker_containers событиями)
+- `container.id` — резолвится из `/proc/<pid>/cgroup` путём парсинга Docker container ID из cgroup-пути (cgroup v2: `docker-<hex>.scope`, cgroup v1: `/docker/<hex>`). Первые 12 hex символов. Поле `cid` из osquery является cgroup namespace inode (числовой ID) на cgroup v2 хостах и **не используется** для резолвинга.
+- `container.name`, `container.image.name`, `container.entity_id` — резолвятся из `container_cache` по `container.id`. Кэш заполняется из `docker_containers` событий. **Если fluent-bit перезапущен** — первые события после рестарта не получат container-атрибуцию до прихода следующего `docker_containers` diff (≤30 сек).
 - `process.entity_id`: FNV-1a(host.name:pid:ntime) — ntime является kernel monotonic ns, поэтому ID **не совпадает** с auditd/processes (те используют epoch seconds). Known limitation до унификации через P0-01.
-- **UEBA**: event-driven (без polling gap); нативный `container.id` → container-aware видимость
+- **UEBA**: event-driven (без polling gap); container-aware видимость через `/proc/<pid>/cgroup` lookup
 
 #### `bpf_sockets` (интервал: 10 сек, event-driven через eBPF)
 
-Каждый `connect` / `bind` / `accept`. Поля osquery: `pid, family, protocol, local_address, local_port, remote_address, remote_port, action, cid`.
+Каждый `connect` / `bind` / `accept`. Поля osquery: `pid, family, protocol, local_address, local_port, remote_address, remote_port, syscall, cid`.
 
-- `event.action: socket_<action>` (socket_connect, socket_bind, socket_accept)
+> **Важно:** колонка называется `syscall` (не `action`) — это системный вызов eBPF-пробы.
+
+- `event.action: socket_<syscall>` → `socket_connect`, `socket_bind`, `socket_accept`
 - `event.dataset: osquery.bpf_socket_events`
-- ECS: `process.pid`, `network.type` (ipv4/ipv6 из family), `network.transport` (tcp/udp из protocol IANA), `source.ip`, `source.port`, `destination.ip`, `destination.port`
-- `container.id`, `container.name`, `container.image.name`, `container.entity_id` — из container_cache
+- ECS: `process.pid`, `network.type` (ipv4/ipv6 из family AF_INET=2/AF_INET6=10), `network.transport` (tcp/udp из protocol IANA), `source.ip`, `source.port`, `destination.ip`, `destination.port`
+- `container.id`, `container.name`, `container.image.name`, `container.entity_id` — резолвятся аналогично bpf_processes через `/proc/<pid>/cgroup` + `container_cache`
 - **UEBA**: второй независимый источник сетевых соединений — кросс-верификация с auditd `connect`
 
 #### `docker_containers` (интервал: 30 сек, diff)
 
 Инвентарь запущенных контейнеров. Заполняет `container_cache` для резолвинга в bpf_*.
 
+> **Важно:** фильтрация по `state = 'running'` (машиночитаемый статус), не по `status` (человекочитаемый: "Up 2 hours").
+
 - `action: added` → `event.action: container_started`, `event.dataset: osquery.docker_containers`
 - `action: removed` → `event.action: container_stopped`
-- ECS: `container.id` (первые 12 hex из id), `container.name`, `container.image.name` (ECS 8.x: не `container.image`), `container.runtime: "docker"`
+- ECS: `container.id` (первые 12 hex из `id`), `container.name`, `container.image.name` (ECS 8.x: не `container.image`), `container.runtime: "docker"`
 - **ECS-extension:** `container.entity_id = host.name:container.name` — кастомное расширение ECS (аналог `process.entity_id`). Стабильный ключ сущности, переживающий рестарты контейнера. Задокументирован здесь как extension.
 - **UEBA**: появление нового контейнера вне baseline → потенциальное shadow deployment
 
@@ -592,6 +597,9 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | Исходный IP (SSH) | `source.ip` | system-auth (fluent-bit), osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections |
 | Команда | `process.command_line` | auditd (execve), osquery processes |
+| Контейнер | `container.id` | osquery bpf_processes, bpf_sockets, docker_containers — Docker short ID (12 hex), резолвится из `/proc/<pid>/cgroup` |
+| Контейнер (стабильный) | `container.entity_id` | osquery bpf_* и docker_containers — `host.name:container.name`, переживает рестарты контейнера |
+| Образ контейнера | `container.image.name` | osquery bpf_* и docker_containers |
 
 > **Кросс-источниковый join по `user.session.id` корректен**: одна формула `FNV-1a(host.name + ":" + btime + ":" + ses)` в обоих enrich-скриптах. Для auditd `ses` берётся из каждого события напрямую; для osquery — из `/proc/<pid>/sessionid`. Поле отсутствует если `ses = 0` (kernel) или `ses = 0xFFFFFFFF` (unset), либо если процесс завершился до enrich osquery.
 
@@ -611,7 +619,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 | Файл | Зачем |
 |------|-------|
-| `agents/configs/osquery/osquery.conf` | Полный список запросов и их SQL — источник schema |
+| `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон конфига osquery. Содержит полный список запросов и их SQL — источник schema. BPF-блоки (`bpf_processes`, `bpf_sockets`, `docker_containers`) включаются при `osquery_bpf_events_enabled: true` (группа `[docker_hosts]`). |
 | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | Маппинг запросов → ECS категории/действия |
 | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг |
 | `agents/configs/fluent-bit/scripts/sshd_enrich.lua` | ECS-нормализация auth.log sshd-строк → system-auth |
