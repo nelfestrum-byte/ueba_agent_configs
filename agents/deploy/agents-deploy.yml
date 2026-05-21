@@ -28,9 +28,6 @@
   become: true
   gather_facts: true
 
-  vars_files:
-    - group_vars/all.yml
-
   pre_tasks:
     - name: Assert Debian-family OS
       ansible.builtin.assert:
