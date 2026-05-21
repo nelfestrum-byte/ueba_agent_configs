@@ -41,3 +41,24 @@ osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
 
 osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
 osquery_apt_repo_url: "https://pkg.osquery.io/deb"
+
+# =============================================================================
+# osquery BPF backend toggle (P2-01)
+# =============================================================================
+#
+# Дефолт: выключено — workstations и generic servers не получают overhead.
+# Переопределяется на уровне группы: скопировать docker_hosts.yml.example
+# → group_vars/docker_hosts.yml и установить true.
+#
+# Требования на хостах с enabled=true:
+#   - ядро ≥ 5.10 (рекомендуется ≥ 5.15)
+#   - /sys/kernel/btf/vmlinux (CONFIG_DEBUG_INFO_BTF=y)
+#   - osquery ≥ 4.6
+#
+# Pre-flight Ansible-assert проверяет ядро и BTF перед раскаткой.
+
+osquery_bpf_events_enabled: false
+
+# Интервал scheduled BPF-запросов (bpf_process_events, bpf_socket_events), сек.
+# Рекомендуется: 10 (баланс latency/объём). Альтернативы: 5 (busy hosts), 30.
+osquery_bpf_interval: 10

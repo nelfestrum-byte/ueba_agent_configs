@@ -29,7 +29,7 @@
 |--------|------|
 | **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
 | **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*`<br>3) Читает /var/log/auth.log; sshd_enrich.lua → TCP 5048 → `system-auth-*` |
-| **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи |
+| **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи.<br>**На docker-хостах** (группа `[docker_hosts]`, `osquery_bpf_events_enabled=true`, ядро ≥5.10): BPF backend → `bpf_process_events`, `bpf_socket_events` — container-aware видимость с нативным `container.id`; `docker_containers` diff для инвентаря контейнеров. |
 
 **auditbeat** не используется — конфликтует с auditd за audit netlink-сокет.
 
@@ -239,6 +239,21 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ### exit-события короткоживущих процессов
 Если процесс завершился до того, как enrich обработал его exit-событие, `/proc/<pid>/stat` уже недоступен и кэша нет → `start_time` берётся из `@timestamp` события. Поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует об этом. `process.entity_id` такого события **не совпадёт** с osquery — это known limitation.
+
+### osquery BPF backend — матрица групп и cross-task с P0-03 (P2-01)
+
+**Матрица:**
+
+| Группа Ansible | `osquery_bpf_events_enabled` | BPF-таблицы |
+|---|---|---|
+| `[docker_hosts]` | `true` (из `group_vars/docker_hosts.yml`) | `bpf_process_events`, `bpf_socket_events`, `docker_containers` |
+| `[workstations]`, `[servers]` | `false` (из `group_vars/all.yml`) | нет |
+
+**Требования на docker-хостах:** ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6. Pre-flight assert в плейбуке.
+
+**Cross-task с P0-03 (audit-правило `-S bpf`):** P0-03 содержит правило `auditd -S bpf`. Когда osqueryd загружает BPF-программы — он сам триггерит это правило → события попадают в fluent-bit → snowball feedback loop. Решение: добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`. Это отдельный маленький коммит — **не смешивать с P2-01**. P0-03 сейчас имеет баги (события с хоста не доходят до Logstash) — whitelist актуален при их устранении.
+
+**container_cache в osquery_enrich.lua:** in-memory словарь `cid[12] → {name, image}`. Заполняется из diff-событий `docker_containers`. `bpf_process_events` и `bpf_socket_events` используют кэш для резолвинга `container.name` / `container.image.name` / `container.entity_id`. Кэш теряется при рестарте fluent-bit — первые BPF-события после рестарта не получат container-атрибуцию.
 
 ---
 

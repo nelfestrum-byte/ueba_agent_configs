@@ -3,6 +3,28 @@
 # agent01  ansible_host=10.0.0.11
 # agent02  ansible_host=10.0.0.12
 
+# Docker-хосты получают osquery BPF backend (P2-01):
+#   osquery_bpf_events_enabled=true (из group_vars/docker_hosts.yml)
+#   Требования: ядро ≥5.10, /sys/kernel/btf/vmlinux, osquery ≥4.6
+#
+# [docker_hosts]
+# docker-node-1.example.com  ansible_host=10.0.0.21
+# docker-node-2.example.com  ansible_host=10.0.0.22
+#
+# Workstations и servers без контейнеров — BPF выключен (default false):
+#
+# [workstations]
+# ws-alice.example.com  ansible_host=10.0.0.31
+#
+# [servers]
+# srv-db-1.example.com  ansible_host=10.0.0.41
+#
+# Группы docker_hosts/workstations/servers должны быть дочерними ueba_agents:
+# [ueba_agents:children]
+# docker_hosts
+# workstations
+# servers
+
 [ueba_agents:vars]
 ansible_user=deploy
 ansible_become=true

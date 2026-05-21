@@ -280,14 +280,45 @@
 
     # ── 6. osquery ─────────────────────────────────────────────────────────────
 
-    - name: Развернуть конфиг osquery
-      ansible.builtin.copy:
-        src: ../configs/osquery/osquery.conf
+    - name: "[P2-01] Pre-flight: kernel version for BPF backend"
+      ansible.builtin.assert:
+        that:
+          - ansible_kernel is version('5.10', '>=')
+        fail_msg: >-
+          osquery_bpf_events_enabled=true requires kernel >= 5.10
+          (found: {{ ansible_kernel }}). Set osquery_bpf_events_enabled=false
+          for this host or upgrade the kernel.
+      when: osquery_bpf_events_enabled | default(false)
+      tags: [osquery, p2_01]
+
+    - name: "[P2-01] Pre-flight: BTF availability"
+      ansible.builtin.stat:
+        path: /sys/kernel/btf/vmlinux
+      register: btf_stat
+      when: osquery_bpf_events_enabled | default(false)
+      tags: [osquery, p2_01]
+
+    - name: "[P2-01] Fail if BTF missing"
+      ansible.builtin.fail:
+        msg: >-
+          BTF (/sys/kernel/btf/vmlinux) is missing on this host —
+          kernel built without CONFIG_DEBUG_INFO_BTF. BPF backend cannot work.
+          Exclude this host from [docker_hosts] or recompile the kernel.
+      when:
+        - osquery_bpf_events_enabled | default(false)
+        - not btf_stat.stat.exists
+      tags: [osquery, p2_01]
+
+    - name: Render and deploy osquery config
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../configs/osquery/osquery.conf.j2"
         dest: /etc/osquery/osquery.conf
         owner: root
         group: root
         mode: "0640"
+        validate: 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" %s'
       notify: restart osqueryd
+      tags: [osquery]
 
     - name: Валидировать конфиг osquery
       ansible.builtin.command:

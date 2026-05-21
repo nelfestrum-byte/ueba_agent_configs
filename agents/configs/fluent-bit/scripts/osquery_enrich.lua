@@ -5,6 +5,12 @@ local _dir = (debug.getinfo(1, "S").source or ""):match("^@(.+/)") or ""
 package.path = _dir .. "?.lua;" .. package.path
 local common = require("proc_common")
 
+-- in-memory кэш container_id[12] → {name, image} для резолвинга container.name
+-- в bpf_process_events / bpf_socket_events (cid поле osquery).
+-- Заполняется при обработке событий от таблицы docker_containers.
+-- Кэш теряется при рестарте fluent-bit.
+local container_cache = {}
+
 -- ── Маппинг имени запроса → ECS category / type / action ──────────────────
 local QUERY_META = {
     processes = {
@@ -174,6 +180,29 @@ local QUERY_META = {
         action_removed = "certificate_removed",
         type_added     = "change",
         type_removed   = "change",
+    },
+
+    -- BPF event-driven tables (P2-01, docker-хосты, ядро ≥5.10)
+    bpf_processes = {
+        category = "process",
+        action_added   = "process_started",
+        action_removed = "process_stopped",
+        type_added     = "start",
+        type_removed   = "end",
+    },
+    bpf_sockets = {
+        category = "network",
+        action_added   = "socket_event",
+        action_removed = "socket_event",
+        type_added     = "start",
+        type_removed   = "end",
+    },
+    docker_containers = {
+        category = "host",
+        action_added   = "container_started",
+        action_removed = "container_stopped",
+        type_added     = "start",
+        type_removed   = "end",
     },
 }
 
@@ -368,6 +397,119 @@ function enrich_osquery(tag, timestamp, record)
     if query_name == "ssh_authorized_keys" then
         if cols["key_file"] and cols["key_file"] ~= "" then
             record["file.path"] = cols["key_file"]
+        end
+    end
+
+    -- ── BPF process events (P2-01, docker-хосты) ─────────────────────────
+    if query_name == "bpf_processes" then
+        record["event.dataset"] = "osquery.bpf_process_events"
+        if cols["pid"]       then record["process.pid"]          = tonumber(cols["pid"]) end
+        if cols["parent"]    then record["process.parent.pid"]   = tonumber(cols["parent"]) end
+        if cols["path"]      and cols["path"] ~= "" then
+            record["process.executable"] = cols["path"]
+        end
+        if cols["cmdline"]   and cols["cmdline"] ~= "" then
+            record["process.command_line"] = cols["cmdline"]
+        end
+        if cols["uid"]       and cols["uid"] ~= "" then record["user.id"]        = cols["uid"] end
+        if cols["gid"]       and cols["gid"] ~= "" then record["user.group.id"]  = cols["gid"] end
+        if cols["exit_code"] and cols["exit_code"] ~= "" then
+            record["process.exit_code"] = tonumber(cols["exit_code"])
+        end
+
+        -- process.entity_id — seed: host:pid:ntime (kernel monotonic ns).
+        -- ntime ≠ epoch seconds, поэтому cache_put не вызываем (не смешиваем
+        -- с epoch-based кэшем из таблицы processes / auditd_enrich).
+        if cols["pid"] and cols["ntime"] and cols["ntime"] ~= "" then
+            local seed = (record["host.name"] or "")
+                      .. ":" .. cols["pid"]
+                      .. ":" .. cols["ntime"]
+            record["process.entity_id"] = common.short_id(seed)
+        end
+
+        -- container resolution из cid (первые 12 hex из cgroup-path hash)
+        if cols["cid"] and cols["cid"] ~= "" then
+            local cid = string.sub(cols["cid"], 1, 12)
+            record["container.id"] = cid
+            local meta = container_cache[cid]
+            if meta then
+                record["container.name"]       = meta.name
+                record["container.image.name"] = meta.image
+                record["container.entity_id"]  = (record["host.name"] or "") .. ":" .. meta.name
+            end
+        end
+
+    -- ── BPF socket events (P2-01, docker-хосты) ──────────────────────────
+    elseif query_name == "bpf_sockets" then
+        record["event.dataset"] = "osquery.bpf_socket_events"
+        if cols["pid"]    then record["process.pid"] = tonumber(cols["pid"]) end
+
+        -- action из subfield (bind/connect/accept) переопределяет QUERY_META default
+        if cols["action"] and cols["action"] ~= "" then
+            record["event.action"] = "socket_" .. cols["action"]
+        end
+
+        -- family: AF_INET=2 → ipv4, AF_INET6=10 → ipv6
+        local fam = cols["family"]
+        if fam then
+            if fam == "2"  then record["network.type"] = "ipv4"
+            elseif fam == "10" then record["network.type"] = "ipv6"
+            else record["network.type"] = fam end
+        end
+
+        -- protocol: IANA number → name через общую таблицу
+        local proto = cols["protocol"]
+        if proto then
+            record["network.transport"]   = PROTO[proto] or proto
+            record["network.iana_number"] = proto
+        end
+
+        if cols["local_address"]  and cols["local_address"] ~= "" then
+            record["source.ip"]   = cols["local_address"]
+        end
+        if cols["local_port"]     and cols["local_port"] ~= "" then
+            record["source.port"] = tonumber(cols["local_port"])
+        end
+        if cols["remote_address"] and cols["remote_address"] ~= "" then
+            record["destination.ip"]   = cols["remote_address"]
+        end
+        if cols["remote_port"]    and cols["remote_port"] ~= "" then
+            record["destination.port"] = tonumber(cols["remote_port"])
+        end
+
+        -- container resolution
+        if cols["cid"] and cols["cid"] ~= "" then
+            local cid = string.sub(cols["cid"], 1, 12)
+            record["container.id"] = cid
+            local meta = container_cache[cid]
+            if meta then
+                record["container.name"]       = meta.name
+                record["container.image.name"] = meta.image
+                record["container.entity_id"]  = (record["host.name"] or "") .. ":" .. meta.name
+            end
+        end
+
+    -- ── Docker container inventory (P2-01) ────────────────────────────────
+    elseif query_name == "docker_containers" then
+        record["event.dataset"]    = "osquery.docker_containers"
+        record["container.runtime"] = "docker"
+
+        if cols["id"] and cols["name"] then
+            local cid  = string.sub(cols["id"], 1, 12)
+            local name = cols["name"]
+            local img  = cols["image"] or ""
+
+            -- обновляем container_cache: bpf_* события резолвят name/image отсюда
+            if action == "added" then
+                container_cache[cid] = { name = name, image = img }
+            else
+                container_cache[cid] = nil
+            end
+
+            record["container.id"]         = cid
+            record["container.name"]       = name
+            record["container.image.name"] = img   -- ECS 8.x: container.image.name
+            record["container.entity_id"]  = (record["host.name"] or "") .. ":" .. name
         end
     end
 

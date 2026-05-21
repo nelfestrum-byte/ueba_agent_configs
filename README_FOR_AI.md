@@ -333,6 +333,43 @@ CA и self-signed сертификаты из системного хранил�
 | `osquery.<column>` | все колонки запроса в flat-namespace |
 | `tags` | `["osquery","security","linux"]` |
 
+### 4.5 BPF backend — event-driven таблицы (только docker-хосты)
+
+**Требования к хосту:** ядро ≥ 5.10 (рекомендуется ≥ 5.15), `/sys/kernel/btf/vmlinux` (CONFIG_DEBUG_INFO_BTF=y), osquery ≥ 4.6.  
+**Toggle:** `osquery_bpf_events_enabled: true` в `agents/deploy/group_vars/docker_hosts.yml`.  
+На workstations и servers без контейнеров BPF backend выключен (дефолт false).
+
+#### `bpf_processes` (интервал: 10 сек, event-driven через eBPF)
+
+Каждый `execve` в реальном времени. Поля osquery: `tid, pid, parent, path, cmdline, uid, gid, ntime, exit_code, probe_error, cgroup, cid`.
+
+- `action: added` → `event.action: process_started`, `event.dataset: osquery.bpf_process_events`
+- `action: removed` → `event.action: process_stopped`
+- ECS: `process.pid`, `process.parent.pid`, `process.executable`, `process.command_line`, `user.id`, `user.group.id`, `process.exit_code`
+- `container.id` из `cid` (первые 12 hex); `container.name`, `container.image.name`, `container.entity_id` — резолвятся из `container_cache` (заполняется docker_containers событиями)
+- `process.entity_id`: FNV-1a(host.name:pid:ntime) — ntime является kernel monotonic ns, поэтому ID **не совпадает** с auditd/processes (те используют epoch seconds). Known limitation до унификации через P0-01.
+- **UEBA**: event-driven (без polling gap); нативный `container.id` → container-aware видимость
+
+#### `bpf_sockets` (интервал: 10 сек, event-driven через eBPF)
+
+Каждый `connect` / `bind` / `accept`. Поля osquery: `pid, family, protocol, local_address, local_port, remote_address, remote_port, action, cid`.
+
+- `event.action: socket_<action>` (socket_connect, socket_bind, socket_accept)
+- `event.dataset: osquery.bpf_socket_events`
+- ECS: `process.pid`, `network.type` (ipv4/ipv6 из family), `network.transport` (tcp/udp из protocol IANA), `source.ip`, `source.port`, `destination.ip`, `destination.port`
+- `container.id`, `container.name`, `container.image.name`, `container.entity_id` — из container_cache
+- **UEBA**: второй независимый источник сетевых соединений — кросс-верификация с auditd `connect`
+
+#### `docker_containers` (интервал: 30 сек, diff)
+
+Инвентарь запущенных контейнеров. Заполняет `container_cache` для резолвинга в bpf_*.
+
+- `action: added` → `event.action: container_started`, `event.dataset: osquery.docker_containers`
+- `action: removed` → `event.action: container_stopped`
+- ECS: `container.id` (первые 12 hex из id), `container.name`, `container.image.name` (ECS 8.x: не `container.image`), `container.runtime: "docker"`
+- **ECS-extension:** `container.entity_id = host.name:container.name` — кастомное расширение ECS (аналог `process.entity_id`). Стабильный ключ сущности, переживающий рестарты контейнера. Задокументирован здесь как extension.
+- **UEBA**: появление нового контейнера вне baseline → потенциальное shadow deployment
+
 ---
 
 ## 5. Источник: fluent-bit SSH auth (индекс `system-auth-*`)

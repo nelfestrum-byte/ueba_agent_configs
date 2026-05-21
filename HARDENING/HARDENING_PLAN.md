@@ -23,7 +23,7 @@
 | P1-02 | ECS Index Templates для OpenSearch (4 шаблона) | ~4 часа | после P0-01, P0-02, P0-03 |
 | P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | после P0-03 |
 | P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-04, P1-01 |
-| P2-01 | osquery BPF backend — переключаемый per-host (docker on / workstation off) | ~1 день | cross-task с P0-04 (whitelist) |
+| **P2-01** | **osquery BPF backend + docker_containers + container.entity_id — фундамент поведенческой модели контейнеров ✓ ВЫПОЛНЕНО 2026-05-21** | ~1.5 дня | cross-task с P0-04 (whitelist) |
 | P2-02 | Расширение osquery-запросов (shell_history, process_envs, supply-chain и пр.) | ~0.5 дня | опц. совмещать с P2-01 (.j2-template) |
 | P3-01 | Unit-тесты Lua-скриптов (merge + enrich) — **отложено** | ~1 день | — |
 | P3-02 | CI: luacheck + syntax-check + dry-run | ~4 часа | — |
@@ -144,7 +144,7 @@ user.session.id = FNV-1a(host.name + ":" + btime + ":" + ses)  →  16 hex си�
 
 **Приоритет:** P0 (высокий — целевой "clean fluent-bit" стек)
 **Стоимость:** ~1 день
-**Статус:** выполнено 2026-05-21
+**Статус:** баг — события приходят на Logstash TCP 5048, но не индексируются в OpenSearch (`system-auth-*`)
 **Зависимости:** —
 **Решения (зафиксированы):**
 
@@ -725,16 +725,17 @@ input {
 
 ---
 
-## P2-01. osquery BPF backend — переключаемый по типу хоста
+## P2-01. osquery BPF backend + container.entity_id — фундамент поведенческой модели контейнеров
 
-**Приоритет:** P2 (defense-in-depth, не закрытие критичной слепой зоны)
-**Стоимость:** ~1 день (templatize конфига + Ansible-логика per-host + enrich + dev-тест)
-**Статус:** не начато
-**Зависимости:** независима, но при появлении будущей задачи syscall-rules (правило auditd `-S bpf`) — обязательная связка через whitelist osqueryd, иначе feedback loop.
+**Приоритет:** P2 → повышен до следующей итерации (необходим для CONTAINER_BEHAVIOR_PLAN)
+**Стоимость:** ~1.5 дня (templatize конфига + docker_containers query + container_cache в enrich + Ansible per-host + dev-тест)
+**Статус:** **выполнено 2026-05-21**
+**Родительский документ:** [CONTAINER_BEHAVIOR_PLAN.md](../CONTAINER_BEHAVIOR_PLAN.md) — Направление 1
+**Зависимости:** независима, но при появлении будущей задачи syscall-rules (правило auditd `-S bpf`) — обязательная связка через whitelist osqueryd, иначе feedback loop. P0-03 существует (с багами) — при починке нужен whitelist `-F exe!=/usr/bin/osqueryd`.
 
 ### Зачем (P2-01)
 
-Активирует в osquery event-driven таблицы `bpf_process_events` и `bpf_socket_events` через флаг `--enable_bpf_events=true`. Что это даёт:
+Активирует в osquery event-driven таблицы `bpf_process_events` и `bpf_socket_events` через флаг `--enable_bpf_events=true`, добавляет `docker_containers` diff-запрос и формирует `container.entity_id` — стабильный ключ сущности для UEBA-скоринга. Что это даёт:
 
 - **Container-aware видимость** на docker-хостах — eBPF читает namespace'ы, auditd плоский по хосту. На docker-хостах без BPF половина процессов внутри контейнеров частично теряется в attribution.
 - **Independent second source** для execve и network — кросс-сверка с auditd. Расхождения двух источников сами по себе сигнал.
@@ -815,12 +816,15 @@ ECS-маппинг: `event.module=osquery`, `event.dataset=osquery.bpf_process_e
 ### Точки изменений (P2-01)
 
 - **Переименовать:** `agents/configs/osquery/osquery.conf` → `osquery.conf.j2`.
-- **Правки:** [agents/configs/fluent-bit/scripts/osquery_enrich.lua](agents/configs/fluent-bit/scripts/osquery_enrich.lua), [agents/deploy/agents-deploy.yml](agents/deploy/agents-deploy.yml), [agents/deploy/group_vars/all.yml](agents/deploy/group_vars/all.yml), [agents/deploy/group_vars/all.yml.example](agents/deploy/group_vars/all.yml.example), [agents/deploy/inventory.ini](agents/deploy/inventory.ini) (комментарии-примеры), [CLAUDE.md](CLAUDE.md).
+- **Правки:** [agents/configs/fluent-bit/scripts/osquery_enrich.lua](agents/configs/fluent-bit/scripts/osquery_enrich.lua) (новые ветки + `container_cache`), [agents/deploy/agents-deploy.yml](agents/deploy/agents-deploy.yml), [agents/deploy/group_vars/all.yml](agents/deploy/group_vars/all.yml), [agents/deploy/group_vars/all.yml.example](agents/deploy/group_vars/all.yml.example), [agents/deploy/inventory.ini](agents/deploy/inventory.ini), [CLAUDE.md](CLAUDE.md).
 - **Новые файлы:** `agents/deploy/group_vars/docker_hosts.yml`.
+- **Обновить:** [CONTAINER_BEHAVIOR_PLAN.md](../CONTAINER_BEHAVIOR_PLAN.md) (статус Недели 1), [README_FOR_AI.md](../README_FOR_AI.md) (раздел 4.5 + ECS-extensions).
 
 ### Критерий готовности (P2-01)
 
 - На docker-test-хосте (с `osquery_bpf_events_enabled=true`, ядро ≥5.10): `osqueryctl config_check` проходит; `osqueryi --enable_bpf_events --json "SELECT count(*) FROM bpf_process_events"` возвращает ненулевой счётчик; в индексе `fluent-osquery-*` появляются документы с `event.dataset=osquery.bpf_process_events`.
+- BPF-документы внутри контейнерных процессов имеют непустые `container.id`, `container.name`, `container.entity_id`.
+- `docker_containers` diff-документы появляются при запуске/остановке контейнера; `container.image.name` (не `container.image`) заполнено корректно.
 - На workstation-test-хосте (с дефолтным `false`): отсутствует флаг `--enable_bpf_events` в рендере конфига; в индексе `fluent-osquery-*` НЕТ документов с `bpf_*` dataset'ом; CPU osqueryd не изменился относительно baseline.
 - Pre-flight срабатывает: при попытке прогнать плейбук с `osquery_bpf_events_enabled=true` против хоста с ядром 4.x — плейбук падает с понятным сообщением до изменения конфига.
 - В CLAUDE.md явно указано: docker → BPF on, workstations → BPF off.

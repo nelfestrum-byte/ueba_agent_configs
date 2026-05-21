@@ -167,8 +167,8 @@ WHERE status = 'running'
 | `host.name` | keyword | Имя хоста |
 | `container.id` | keyword | Docker container ID (первые 12 символов) |
 | `container.name` | keyword | Имя контейнера (docker-compose service name) |
-| `container.image` | keyword | Образ (без тега) |
-| `container.entity_id` | keyword | `host.name:container.name` — ключ сущности |
+| `container.image.name` | keyword | Образ (ECS 8.x: `container.image.name`, не `container.image`) |
+| `container.entity_id` | keyword | `host.name:container.name` — ключ сущности (**ECS-extension**, задокументировано в README_FOR_AI.md §4.5) |
 | `event.dataset` | keyword | `osquery.bpf_process_events` или `osquery.bpf_socket_events` |
 | `event.action` | keyword | `process_started`, `process_stopped`, `socket_connect`, `socket_bind` |
 | `event.category` | keyword | `process` или `network` |
@@ -285,10 +285,10 @@ SSH аутентификация, уровень хоста.
 ## Порядок реализации
 
 ```
-Неделя 1
-  ├── P2-01: osquery BPF backend (промпт готов)
-  ├── docker_containers query в osquery.conf
-  └── osquery_enrich.lua: BPF маппинг + container.entity_id
+Неделя 1 — ВЫПОЛНЕНО 2026-05-21
+  ├── P2-01: osquery BPF backend ✓
+  ├── docker_containers query в osquery.conf.j2 ✓
+  └── osquery_enrich.lua: BPF маппинг + container.entity_id ✓
 
 Неделя 2
   ├── OpenSearch: обновить template fluent-osquery-*
@@ -316,10 +316,10 @@ SSH аутентификация, уровень хоста.
 
 | Зависимость | Статус |
 |-------------|--------|
-| osquery ≥ 4.6 на docker-хостах | уточнить |
-| Ядро ≥ 5.10 + BTF на docker-хостах | уточнить |
+| osquery ≥ 4.6 на docker-хостах | подтверждено (5.23.0) |
+| Ядро ≥ 5.10 + BTF на docker-хостах | pre-flight assert в плейбуке |
 | P0-01 (`process.entity_id`) | выполнено 2026-05-18 |
-| P2-01 промпт | готов |
+| P2-01 (BPF backend + container.entity_id) | **выполнено 2026-05-21** |
 | Доступ к OpenSearch Anomaly Detection plugin | проверить версию |
 
 ---
