@@ -35,11 +35,9 @@ services:
     # В продакшне биндим порты на внутренний интерфейс через LOGSTASH_BIND_ADDR
     # (например, LOGSTASH_BIND_ADDR=10.0.0.5), а не на 0.0.0.0.
     ports:
-      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5044:5044"   # beats: filebeat (system/auth)
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5044:5044"   # beats relay
       - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5045:5045"   # fluent-bit: auditd TCP
-      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5046:5046"   # winevtlog TCP (stub)
       - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5047:5047"   # fluent-bit: osquery TCP
-      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5049:5049"   # suricata TCP
     environment:
       - "LS_JAVA_OPTS=-Xms1g -Xmx1g"
     networks:

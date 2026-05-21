@@ -42,10 +42,7 @@ Linux-хост
 |--------|------|--------|
 | **auditd** + **fluent-bit** | Kernel audit: execve, sudo, auth, файловые события | `fluent-audit-*` |
 | **osquery** + **fluent-bit** | Diff-мониторинг: процессы, соединения, пользователи, модули, cron, SSH-ключи | `fluent-osquery-*` |
-| **filebeat** *(временный)* | SSH auth.log → beats-протокол | `filebeat-*` |
-
-> **auditbeat отключён** — конфликтует с auditd за audit netlink-сокет.
-> **filebeat** — временный компонент только для SSH auth.log. Планируется замена на fluent-bit pipeline.
+| **fluent-bit** | SSH auth.log → sshd_enrich.lua | `system-auth-*` |
 
 ---
 
@@ -125,7 +122,6 @@ osquery_version:  "5.23.0"
 
 **Подготовка пакетов (офлайн):**
 ```powershell
-# Windows, требуется Docker Desktop:
 .\agents\deploy\fetch-packages\fetch.ps1
 ```
 

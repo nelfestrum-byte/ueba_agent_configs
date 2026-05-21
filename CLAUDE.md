@@ -31,7 +31,7 @@
 | **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*`<br>3) Читает /var/log/auth.log; sshd_enrich.lua → TCP 5048 → `system-auth-*` |
 | **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи |
 
-**auditbeat** остановлен/отключён — конфликтует с auditd за audit netlink-сокет.
+**auditbeat** не используется — конфликтует с auditd за audit netlink-сокет.
 
 ## Структура проекта
 
@@ -43,7 +43,7 @@ ueba-stand/
 │   │   ├── logstash.yml                 — настройки Logstash (workers, queue)
 │   │   ├── pipelines.yml                — список пайплайнов
 │   │   ├── pipeline/
-│   │   │   └── ueba-main.conf           — ГЛАВНЫЙ файл: beats relay + Suricata/Windows
+│   │   │   └── ueba-main.conf           — ГЛАВНЫЙ файл: beats relay + fluent-bit TCP 5045/5047/5048
 │   │   └── patterns/                    — grok-паттерны (.gitkeep)
 │   └── deploy/
 │       ├── logstash-deploy.yml          — Ansible плейбук (docker pull + deploy)
@@ -103,7 +103,7 @@ ueba-stand/
 
 | Тема | Файлы | Назначение |
 |------|-------|-----------|
-| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats 5044 + fluent-bit TCP 5045 + Suricata/Windows |
+| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats relay 5044 + fluent-bit TCP 5045/5047/5048 |
 | **Конфиги Logstash** | `logstash/configs/logstash.yml`, `pipelines.yml` | Настройки рантайма |
 | **Деплой Logstash** | `logstash/deploy/logstash-deploy.yml` | Ansible: docker pull + copy + up |
 | **Переменные Logstash** | `logstash/deploy/group_vars/all.yml` | opensearch_url, SSL, image, bind_addr |
@@ -126,8 +126,6 @@ ueba-stand/
 | `fluent-audit-YYYY.MM.dd` | fluent-bit: auditd ECS-события (execve, sudo, auth, network, file) — TCP 5045 |
 | `fluent-osquery-YYYY.MM.dd` | fluent-bit: osquery diff-события ECS + osquery.* namespace — TCP 5047 |
 | `system-auth-YYYY.MM.dd` | fluent-bit: SSH auth.log sshd ECS-события — TCP 5048 |
-| `suricata-YYYY.MM.dd` | Suricata eve.json (TCP 5049) |
-| `winevtlog-YYYY.MM.dd` | Windows winevtlog (TCP 5046, stub) |
 
 ## Инструкции по сокращению токенов
 

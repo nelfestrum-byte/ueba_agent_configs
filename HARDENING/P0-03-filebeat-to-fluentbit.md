@@ -254,7 +254,7 @@ git rm -r agents/configs/filebeat/
 
 ## Что НЕ делать в этой итерации
 
-- **НЕ удалять Logstash beats input на 5044.** Это закладка под Windows winlogbeat в будущем (упомянуто в плане).
+- **НЕ удалять Logstash beats input на 5044.** Общий relay для любых beats-агентов.
 - **НЕ создавать index template** для `system-auth-*` — это P1-02. Сейчас индекс создаётся с dynamic mapping, это приемлемо до P1-02.
 - **НЕ добавлять TLS на порт 5048** — это P1-03.
 - **НЕ парсить все возможные строки auth.log** (su, sudo через PAM, CRON). Покрыть только sshd-форматы из таблицы; всё остальное падает в "other" с event.category=authentication.

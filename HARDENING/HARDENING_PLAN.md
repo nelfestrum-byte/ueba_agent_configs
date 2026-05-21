@@ -28,7 +28,6 @@
 | P3-01 | Unit-тесты Lua-скриптов (merge + enrich) — **отложено** | ~1 день | — |
 | P3-02 | CI: luacheck + syntax-check + dry-run | ~4 часа | — |
 | P3-03 | Property-based fuzz для merge-buffer | ~0.5 дня | требует P3-01 инфраструктуру |
-| P4-01 | DNS/TLS visibility через Suricata (опц. Zeek) — **Extras** | ~0.5 дня (минимально) / ~2 дня (с Zeek) | после P1-02 (шаблон suricata) |
 
 ---
 
@@ -222,7 +221,7 @@ input { tcp { port => 5048 codec => json_lines tags => ["system-auth","fluent-bi
 - **journald-only дистрибутивы:** на Ubuntu 22.04+ auth.log может быть отключён в пользу journald. Решения: либо включить rsyslog для записи auth.log, либо использовать `[INPUT] systemd` в fluent-bit (другой парсер). Уточнить по факту целевого окружения.
 - **Syslog timestamp без года** (`Jan 15 10:30:45`) — fluent-bit парсер должен обогатить текущим годом; вокруг 31 декабря/1 января возможна неоднозначность.
 - **DB position для tail:** обязательно настроить `db /var/lib/fluent-bit/sshd.db`, иначе при рестарте дубли событий.
-- **Beats 5044 input в Logstash оставить.** Не удалять — закладка под winlogbeat/Windows-источники.
+- **Beats 5044 input в Logstash оставить.** Общий relay для любых beats-агентов.
 - **Регэкспы sshd-форматов** — auth.log forматы за годы менялись (Debian Buster vs Bookworm vs Ubuntu 22.04). Реальный набор форматов уточнить, прогнав на test-хосте `journalctl _SYSTEMD_UNIT=ssh.service | grep -E 'Failed|Accepted|Invalid|Disconnected'` и обновив enrich по факту.
 - **Совместимость dashboards:** существующие саvedSearch/visualization в OpenSearch Dashboards, ссылающиеся на `filebeat-*`, перестанут видеть новые данные. Их нужно пересоздать на `system-auth-*` (либо настроить index alias `auth-* → filebeat-*, system-auth-*`, но это усложнение — рекомендую clean cut).
 
@@ -439,12 +438,11 @@ Index templates закрывают всё это разом: один JSON на 
 
 ### Что делать (P1-02)
 
-**1. Создать 4 шаблона:**
+**1. Создать 3 шаблона:**
 
 - [logstash/configs/templates/fluent-audit.json](logstash/configs/templates/fluent-audit.json) — pattern `fluent-audit-*`, `event.module=auditd` constant_keyword.
 - [logstash/configs/templates/fluent-osquery.json](logstash/configs/templates/fluent-osquery.json) — pattern `fluent-osquery-*`, `event.module=osquery` constant_keyword.
 - [logstash/configs/templates/system-auth.json](logstash/configs/templates/system-auth.json) — pattern `system-auth-*`, `event.module=system` constant_keyword (после P0-03).
-- [logstash/configs/templates/suricata.json](logstash/configs/templates/suricata.json) — pattern `suricata-*`, у Suricata своя расширенная ECS — отдельный набор полей.
 
 **2. Критичные поля под UEBA, которые обязательно должны быть явно типизированы:**
 
@@ -492,7 +490,6 @@ Index templates закрывают всё это разом: один JSON на 
     - fluent-audit
     - fluent-osquery
     - system-auth
-    - suricata
 ```
 
 **4. Структура шаблона (черновик `fluent-audit.json`):**
@@ -1065,118 +1062,4 @@ tests/lua/
 - **Порядок ключей в Lua-таблицах** недетерминирован. Сравнение "изоморфно" — НЕ через прямой `==` таблиц, а через рекурсивное сравнение значений по ключам.
 - **Серии с timeout-флашем (auditd 4.x без EOE)** — там порядок важен (приходящие после timeout-флаша записи дают второй документ). Это отдельная property, не общая инвариантность.
 - **Запись `PROCTITLE` обычно идёт последней** в реальном auditd-выводе. Перестановки с `PROCTITLE` в начале — синтетический случай. Если такие падают, но в реальной жизни не встречаются — задокументировать и oставить как known limitation.
-
----
-
-## Дополнения (Extras)
-
-Задачи ниже **не входят** в core hardening. Это расширения области видимости в сторону network-уровня (DNS, TLS SNI). Делать после того, как core P0-P3 закрыт и есть аппетит на расширение, либо когда поведенческий анализ начнёт упираться в отсутствие сетевого слоя.
-
----
-
-## P4-01 (Extras). DNS/TLS visibility через Suricata, опционально Zeek
-
-**Приоритет:** P4 (дополнение, не часть core hardening)
-**Стоимость:** ~0.5 дня (минимальный путь через Suricata) — ~2 дня (с добавлением Zeek-сенсора)
-**Статус:** не начато
-**Зависимости:** P1-02 (там создаётся шаблон `suricata.json`, его надо расширить новыми полями).
-
-### Зачем (P4-01)
-
-auditd, osquery и system-auth не видят:
-
-- **DNS-резолвы** (имя, тип, ответ, IP-адреса в ответе).
-- **TLS SNI** и JA3-fingerprint клиента.
-- **Метаданные TLS-handshake** (cert subject, validity, JA3S).
-
-Это критическая слепая зона для современного UEBA. Основная масса C2-каналов, exfiltration и lateral movement детектится именно через DNS-аномалии (beaconing, DGA, длинные TXT-запросы, anomalous TLDs) и SNI-эвристики (mismatched SNI vs cert, известные malicious SNI, TLS-without-SNI на нестандартные порты).
-
-### Два пути (P4-01)
-
-**Путь A — минимальный, через существующую Suricata.** В pipeline уже есть Suricata input на порту 5049. Suricata из коробки пишет `dns` и `tls` event_type в eve.json — мы их сейчас игнорируем, пропускаем только `alert`. Минимальная задача: расширить блок `if "suricata" in [tags]` в [ueba-main.conf](logstash/configs/pipeline/ueba-main.conf) маппингом этих типов в ECS-совместимые поля. Стоит **0.5 дня**, ничего деплоить не надо.
-
-**Путь B — Zeek как отдельный сенсор.** Zeek даёт **богаче** (conn.log, dns.log, ssl.log, files.log, x509.log) — особенно полезен для file-hash extraction из HTTP/SMB и более подробного TLS-метадаты. Но требует **отдельного развёртывания** (Zeek-сенсор на span-port или AF_PACKET-входе) и собственного пайплайна доставки в Logstash. Стоит **2 дня** + железо.
-
-**Рекомендую путь A на старте.** Zeek — следующий уровень, добавляем когда упрёмся в недостаточность Suricata DNS-метаданных.
-
-### Что делать (Путь A, минимальный)
-
-**1. Расширить Suricata-блок в [ueba-main.conf](logstash/configs/pipeline/ueba-main.conf):**
-
-```ruby
-if "suricata" in [tags] {
-  if [event_type] == "dns" {
-    mutate {
-      add_field => {
-        "[event][category]" => "network"
-        "[event][type]" => "info"
-        "[event][action]" => "dns_query"
-        "[event][dataset]" => "suricata.dns"
-        "[dns][question][name]" => "%{[dns][rrname]}"
-        "[dns][question][type]" => "%{[dns][rrtype]}"
-      }
-    }
-    # Развернуть массив answers в плоский related.ip
-    ruby {
-      code => "
-        answers = event.get('[dns][answers]') || []
-        ips = answers.select{|a| a['rdata'] && a['rrtype'] =~ /^(A|AAAA)$/ }.map{|a| a['rdata']}
-        event.set('[related][ip]', ips) unless ips.empty?
-      "
-    }
-  }
-  if [event_type] == "tls" {
-    mutate {
-      add_field => {
-        "[event][category]" => "network"
-        "[event][action]" => "tls_handshake"
-        "[event][dataset]" => "suricata.tls"
-        "[tls][client][server_name]" => "%{[tls][sni]}"
-        "[tls][client][ja3]" => "%{[tls][ja3][hash]}"
-        "[tls][server][ja3s]" => "%{[tls][ja3s][hash]}"
-      }
-    }
-  }
-  # Существующий блок для event_type=alert остаётся как был
-}
-```
-
-**2. Расширить [logstash/configs/templates/suricata.json](logstash/configs/templates/suricata.json)** (создаётся в P1-02) новыми полями:
-
-```json
-"dns.question.name":         { "type": "keyword" },
-"dns.question.type":         { "type": "keyword" },
-"dns.resolved_ip":           { "type": "ip" },
-"tls.client.server_name":    { "type": "keyword" },
-"tls.client.ja3":            { "type": "keyword" },
-"tls.server.ja3s":           { "type": "keyword" },
-"tls.server.subject":        { "type": "keyword" },
-"related.ip":                { "type": "ip" }
-```
-
-**3. Документация:**
-
-- [CLAUDE.md](CLAUDE.md): расширить раздел про Suricata, упомянуть DNS/TLS-events.
-- README.md: обновить список UEBA-features, упомянуть DNS-видимость.
-
-### Точки изменений (P4-01, путь A)
-
-- [logstash/configs/pipeline/ueba-main.conf](logstash/configs/pipeline/ueba-main.conf).
-- [logstash/configs/templates/suricata.json](logstash/configs/templates/suricata.json) (создаётся в P1-02).
-- [CLAUDE.md](CLAUDE.md), README.md.
-
-### Критерий готовности (P4-01)
-
-- В индексе `suricata-*` появляются документы с непустыми `dns.question.name` и `tls.client.server_name`.
-- Существующие IDS-алерты (`event_type=alert`) парсятся как раньше — регресс не возник.
-- Запрос "топ-50 уникальных DNS-имён за час" в OpenSearch возвращает осмысленные результаты.
-- Маппинг `related.ip` как тип `ip` — проверить через `_mapping`.
-
-### Грабли (P4-01)
-
-- **Объём DNS-событий** на busy-сегменте может быть огромным (легко 1M+ запросов/сутки на один gateway). Решения: либо sampling на стороне Suricata (только uncommon TLDs, длинные имена, NXDOMAIN), либо filterять в Logstash на типичные `_local`/`.in-addr.arpa`/`.local` reverse-запросы, либо просто принимать объём.
-- **`dns.answers[]`** в Suricata eve.json — массив объектов с разными `rrtype`. ECS требует плоский массив IP в `dns.resolved_ip[]` / `related.ip[]`. Без ruby-filter (как в примере выше) теряется типизация — нужно тестировать в обоих направлениях.
-- **JA3 fingerprinting эволюционирует.** Если перейдём к Zeek или другому сенсору — JA3 значения могут не совпадать (зависит от реализации hash'ера). Не строить UEBA-rules на жёстко зашитых JA3-значениях.
-- **TLS 1.3 ESNI/ECH.** В TLS 1.3 с Encrypted Client Hello (растущий тренд 2025-2026) SNI зашифрован — Suricata не увидит server_name. Видимость по SNI деградирует по мере распространения ECH; для UEBA это известное ограничение, не баг.
-
----
+

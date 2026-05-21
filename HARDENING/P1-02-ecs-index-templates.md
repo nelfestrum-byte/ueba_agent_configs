@@ -157,21 +157,6 @@
 
 `logstash/configs/templates/system-auth.json` — `event.module=system`, `event.dataset=system.auth`, без auditd-специфики и без `osquery.*`. Главные поля: user, source.ip, source.port, event.*, host.*, related.user, related.ip, process.name (фиксировано "sshd"). Можно сделать `process.name: { "type": "constant_keyword", "value": "sshd" }` — экономия диска.
 
-`logstash/configs/templates/suricata.json` — `event.module=suricata`, плюс network-богатые поля:
-
-```json
-"event.severity":            { "type": "long" },
-"network.transport":         { "type": "keyword" },
-"network.protocol":          { "type": "keyword" },
-"suricata.eve.event_type":   { "type": "keyword" },
-"suricata.eve.flow_id":      { "type": "long" },
-"suricata.eve.alert.signature": { "type": "keyword" },
-"suricata.eve.alert.signature_id": { "type": "long" },
-"suricata.eve.alert.severity": { "type": "long" }
-```
-
-(плюс общий ECS-блок source/destination/host/event/@timestamp).
-
 **Совет:** не дублируй вручную — вынеси общий ECS-блок в комментарий в README шаблонов или внутри одного файла как reference; если повторений станет много — рассмотрим composable templates (отдельная задача).
 
 ### Шаг 2. Ansible-task для PUT-загрузки шаблонов
@@ -202,7 +187,6 @@
     - fluent-audit
     - fluent-osquery
     - system-auth
-    - suricata
   tags: [templates]
 ```
 
@@ -218,7 +202,7 @@ ansible-playbook logstash-deploy.yml --ask-vault-pass --tags=templates --limit=d
 Проверить:
 
 ```bash
-curl -s "$OS/_index_template?pretty" | jq '.index_templates[] | select(.name | startswith("fluent-") or startswith("system-") or startswith("suricata")) | .name'
+curl -s "$OS/_index_template?pretty" | jq '.index_templates[] | select(.name | startswith("fluent-") or startswith("system-")) | .name'
 ```
 
 Должны быть 4 имени.
@@ -300,7 +284,7 @@ curl -X POST "$OS/fluent-audit-test/_doc" -H 'Content-Type: application/json' -d
    ```
    P1-02: ECS index templates for OpenSearch
 
-   - 4 templates: fluent-audit, fluent-osquery, system-auth, suricata
+   - 3 templates: fluent-audit, fluent-osquery, system-auth
    - constant_keyword for event.module/event.dataset (disk savings)
    - ip type for source.ip/destination.ip/related.ip (CIDR + geo)
    - Ansible PUT task in logstash-deploy.yml (tag: templates)

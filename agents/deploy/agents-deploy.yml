@@ -18,9 +18,6 @@
 #                sshd_enrich.lua → Logstash TCP 5048
 #                → OpenSearch индекс system-auth-YYYY.MM.dd
 #
-# ВАЖНО: auditbeat и auditd не могут работать одновременно (конфликт за
-#        audit netlink-сокет). Плейбук останавливает и отключает auditbeat.
-#
 # Использование:
 #   cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 #
@@ -60,17 +57,7 @@
 
   tasks:
 
-    # ── 1. Остановить конфликтующие сервисы ───────────────────────────────────
-    # auditbeat и auditd не могут одновременно владеть audit netlink-сокетом.
-
-    - name: Остановить и отключить auditbeat (конфликт с auditd)
-      ansible.builtin.systemd:
-        name: auditbeat
-        state: stopped
-        enabled: false
-      failed_when: false
-
-    # ── 2. apt-репозитории (только в онлайн-режиме) ───────────────────────────
+    # ── 1. apt-репозитории (только в онлайн-режиме) ──────────────────────────
 
     - name: Добавить GPG ключ osquery
       ansible.builtin.get_url:
