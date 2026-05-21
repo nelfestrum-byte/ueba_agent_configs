@@ -253,10 +253,17 @@
         mode: "0640"
       notify: restart fluent-bit
 
-    - name: Добавить fluent-bit в группу adm (чтение audit.log и auth.log)
+    - name: Добавить fluent-bit в группу adm (чтение /var/log/audit/audit.log)
       ansible.builtin.user:
         name: fluent-bit
         groups: adm
+        append: true
+      notify: restart fluent-bit
+
+    - name: Добавить fluent-bit в группу systemd-journal (чтение journald для sshd)
+      ansible.builtin.user:
+        name: fluent-bit
+        groups: systemd-journal
         append: true
       notify: restart fluent-bit
 
