@@ -203,3 +203,44 @@ curl -u admin:password -X PUT "https://opensearch:9200/_index_template/fluent-au
 - **TLS не настроен**: fluent-bit → Logstash по TCP без шифрования. Для прода использовать beats-протокол с mTLS.
 - **CA-сертификат** не хранится в git — положить вручную перед деплоем Logstash.
 - **Офлайн-пакеты** (`*.deb`) не хранятся в git — перезапустить `fetch.ps1` при смене версий.
+
+### ⚠️ osquery BPF backend: переполнение буфера (docker-хосты)
+
+На нагруженных docker-хостах eBPF perf-ring-буфер может переполняться, что приводит к **молчаливой потере событий** в `bpf_process_events` и `bpf_socket_events`.
+
+**Диагностика:**
+
+```bash
+# 1. События с ошибкой пробы — probe_error=1 означает drop на уровне eBPF:
+grep '"probe_error":"1"' /var/log/osquery/osqueryd.results.log | wc -l
+
+# 2. Сообщения о переполнении в логе osquery:
+grep -iE 'lost|overflow|drop' /var/log/osquery/osqueryd.WARNING 2>/dev/null | tail -20
+
+# 3. В OpenSearch Dashboards: фильтр osquery.probe_error:1
+#    Если таких событий > 1% от bpf_process_events — буфер мал.
+```
+
+**Параметры и где менять:**
+
+Файл: `agents/configs/osquery/osquery.conf.j2`, блок `{% if osquery_bpf_events_enabled %}` в секции `options`:
+
+| Параметр | Текущее значение | Описание | Когда увеличить |
+|---|---|---|---|
+| `bpf_perf_event_array_exp` | `14` | Размер perf ring-буфера: 2^N страниц × 4 КБ **на каждое CPU**. Значение 14 → 64 МБ/CPU | Много короткоживущих процессов (CI/CD), `probe_error` > 0 |
+| `bpf_buffer_storage_size` | `1024` | Внутренний буфер osquery в МБ для BPF-событий до их записи в лог | Высокий throughput сокет-событий |
+
+```jsonc
+// agents/configs/osquery/osquery.conf.j2 — рекомендуемые значения для busy-хостов:
+"bpf_perf_event_array_exp": "15",   // 128 МБ/CPU (было 14 → 64 МБ/CPU)
+"bpf_buffer_storage_size": "2048",  // 2 ГБ (было 1024)
+```
+
+После изменения — раскатить и перезапустить osqueryd:
+
+```bash
+cd agents/deploy
+ansible-playbook agents-deploy.yml --ask-become-pass --limit=<docker-host> --tags=osquery
+```
+
+> **Память:** `bpf_perf_event_array_exp=15` на 4-ядерном хосте потребляет ~512 МБ RAM только под perf-буферы. Увеличивать осторожно на хостах с ограниченной памятью.
