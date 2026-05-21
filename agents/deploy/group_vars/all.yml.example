@@ -62,3 +62,13 @@ osquery_bpf_events_enabled: false
 # Интервал scheduled BPF-запросов (bpf_process_events, bpf_socket_events), сек.
 # Рекомендуется: 10 (баланс latency/объём). Альтернативы: 5 (busy hosts), 30.
 osquery_bpf_interval: 10
+
+# =============================================================================
+# osquery host profile (P2-02)
+# =============================================================================
+#
+# Значения: "server" (default), "workstation".
+# Переопределяется через group_vars/workstations.yml или per-host host_vars.
+# Workstation-профиль добавляет: chrome_extensions_diff, firefox_addons_diff.
+
+osquery_profile: server

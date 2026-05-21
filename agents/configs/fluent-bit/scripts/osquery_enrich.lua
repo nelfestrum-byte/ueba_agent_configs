@@ -182,6 +182,99 @@ local QUERY_META = {
         type_removed   = "change",
     },
 
+    -- P2-02: new scheduled queries
+    shell_history = {
+        category     = "process",
+        action_added   = "shell_command",
+        action_removed = "shell_command",
+        type_added     = "info",
+        type_removed   = "info",
+    },
+    last_logins = {
+        category     = "authentication",
+        action_added   = "user_login",
+        action_removed = "user_logout",
+        type_added     = "start",
+        type_removed   = "end",
+    },
+    preload_envs = {
+        category     = "process",
+        action_added   = "preload_env_set",
+        action_removed = "preload_env_set",
+        type_added     = "info",
+        type_removed   = "info",
+    },
+    python_packages_diff = {
+        category     = "package",
+        action_added   = "package_installed",
+        action_removed = "package_removed",
+        type_added     = "installation",
+        type_removed   = "deletion",
+    },
+    npm_packages_diff = {
+        category     = "package",
+        action_added   = "package_installed",
+        action_removed = "package_removed",
+        type_added     = "installation",
+        type_removed   = "deletion",
+    },
+    pip_packages_diff = {
+        category     = "package",
+        action_added   = "package_installed",
+        action_removed = "package_removed",
+        type_added     = "installation",
+        type_removed   = "deletion",
+    },
+    deb_packages_diff = {
+        category     = "package",
+        action_added   = "package_installed",
+        action_removed = "package_removed",
+        type_added     = "installation",
+        type_removed   = "deletion",
+    },
+    kernel_keys_diff = {
+        category     = "iam",
+        action_added   = "kernel_key_added",
+        action_removed = "kernel_key_removed",
+        type_added     = "creation",
+        type_removed   = "deletion",
+    },
+    sudoers_diff = {
+        category     = "iam",
+        action_added   = "sudoers_modified",
+        action_removed = "sudoers_modified",
+        type_added     = "change",
+        type_removed   = "change",
+    },
+    acpi_tables_diff = {
+        category     = "host",
+        action_added   = "acpi_table_added",
+        action_removed = "acpi_table_removed",
+        type_added     = "change",
+        type_removed   = "change",
+    },
+    suspicious_mmap = {
+        category     = "process",
+        action_added   = "non_standard_mmap",
+        action_removed = "non_standard_mmap",
+        type_added     = "info",
+        type_removed   = "info",
+    },
+    chrome_extensions_diff = {
+        category     = "configuration",
+        action_added   = "extension_installed",
+        action_removed = "extension_removed",
+        type_added     = "installation",
+        type_removed   = "deletion",
+    },
+    firefox_addons_diff = {
+        category     = "configuration",
+        action_added   = "addon_installed",
+        action_removed = "addon_removed",
+        type_added     = "installation",
+        type_removed   = "deletion",
+    },
+
     -- BPF event-driven tables (P2-01, docker-хосты, ядро ≥5.10)
     bpf_processes = {
         category = "process",
@@ -511,6 +604,93 @@ function enrich_osquery(tag, timestamp, record)
             record["container.image.name"] = img   -- ECS 8.x: container.image.name
             record["container.entity_id"]  = (record["host.name"] or "") .. ":" .. name
         end
+    end
+
+    -- ── P2-02: field extraction for new scheduled queries ────────────────
+    if query_name == "shell_history" then
+        record["event.dataset"] = "osquery.shell_history"
+        if cols["command"]      and cols["command"] ~= ""      then
+            record["process.command_line"] = cols["command"]
+        end
+        if cols["history_file"] and cols["history_file"] ~= "" then
+            record["file.path"] = cols["history_file"]
+        end
+
+    elseif query_name == "last_logins" then
+        record["event.dataset"] = "osquery.last"
+        -- type=8 (DEAD_PROCESS) → logout; type=7 (USER_PROCESS) → login (QUERY_META default)
+        if cols["type"] == "8" then
+            record["event.action"] = "user_logout"
+            record["event.type"]   = "end"
+        end
+        if cols["source_host"] and cols["source_host"] ~= "" then
+            record["source.ip"] = cols["source_host"]
+        end
+        if cols["tty"] and cols["tty"] ~= "" then
+            record["user.terminal"] = cols["tty"]
+        end
+
+    elseif query_name == "preload_envs" then
+        record["event.dataset"] = "osquery.process_envs"
+        if cols["pid"]          then record["process.pid"]          = tonumber(cols["pid"]) end
+        if cols["process_name"] then record["process.name"]         = cols["process_name"] end
+        if cols["process_path"] then record["process.executable"]   = cols["process_path"] end
+        if cols["cmdline"]      then record["process.command_line"] = cols["cmdline"] end
+        if cols["key"]          then record["process.env.key"]      = cols["key"] end
+        if cols["value"]        then record["process.env.value"]    = cols["value"] end
+
+    elseif query_name == "python_packages_diff" then
+        record["event.dataset"] = "osquery.python_packages"
+        if cols["name"]    then record["package.name"]    = cols["name"] end
+        if cols["version"] then record["package.version"] = cols["version"] end
+        if cols["path"]    then record["package.path"]    = cols["path"] end
+
+    elseif query_name == "npm_packages_diff" then
+        record["event.dataset"] = "osquery.npm_packages"
+        if cols["name"]    then record["package.name"]    = cols["name"] end
+        if cols["version"] then record["package.version"] = cols["version"] end
+        if cols["path"]    then record["package.path"]    = cols["path"] end
+
+    elseif query_name == "pip_packages_diff" then
+        record["event.dataset"] = "osquery.pip_packages"
+        if cols["name"]    then record["package.name"]    = cols["name"] end
+        if cols["version"] then record["package.version"] = cols["version"] end
+        if cols["path"]    then record["package.path"]    = cols["path"] end
+
+    elseif query_name == "deb_packages_diff" then
+        record["event.dataset"] = "osquery.deb_packages"
+        if cols["name"]    then record["package.name"]         = cols["name"] end
+        if cols["version"] then record["package.version"]      = cols["version"] end
+        if cols["arch"]    then record["package.architecture"] = cols["arch"] end
+
+    elseif query_name == "kernel_keys_diff" then
+        record["event.dataset"] = "osquery.kernel_keys"
+
+    elseif query_name == "sudoers_diff" then
+        record["event.dataset"] = "osquery.sudoers"
+
+    elseif query_name == "acpi_tables_diff" then
+        record["event.dataset"] = "osquery.acpi_tables"
+
+    elseif query_name == "suspicious_mmap" then
+        record["event.dataset"] = "osquery.process_memory_map"
+        if cols["pid"]          then record["process.pid"]  = tonumber(cols["pid"]) end
+        if cols["process_name"] then record["process.name"] = cols["process_name"] end
+        if cols["path"]         then record["file.path"]    = cols["path"] end
+
+    elseif query_name == "chrome_extensions_diff" then
+        record["event.dataset"] = "osquery.chrome_extensions"
+        if cols["name"]       then record["package.name"]       = cols["name"] end
+        if cols["version"]    then record["package.version"]    = cols["version"] end
+        if cols["identifier"] then record["package.identifier"] = cols["identifier"] end
+        if cols["uid"]        then record["user.id"]            = cols["uid"] end
+
+    elseif query_name == "firefox_addons_diff" then
+        record["event.dataset"] = "osquery.firefox_addons"
+        if cols["name"]       then record["package.name"]       = cols["name"] end
+        if cols["version"]    then record["package.version"]    = cols["version"] end
+        if cols["identifier"] then record["package.identifier"] = cols["identifier"] end
+        if cols["uid"]        then record["user.id"]            = cols["uid"] end
     end
 
     -- ── Теги ──────────────────────────────────────────────────────────────

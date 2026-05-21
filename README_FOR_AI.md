@@ -306,6 +306,136 @@ CA и self-signed сертификаты из системного хранил�
 - `action: added` → `event.action: certificate_added`
 - **UEBA**: добавление нового CA → MitM подготовка
 
+---
+
+### 4.3-P2 Запросы P2-02 (добавлены 2026-05-21)
+
+#### `shell_history` (интервал: 300 сек, профиль: both)
+
+```sql
+SELECT uid, username, command, history_file FROM shell_history;
+```
+
+- `removed: false` — только `action: added` (новые строки истории)
+- `event.action: shell_command`, `event.category: process`, `event.type: info`
+- ECS: `process.command_line` (command), `file.path` (history_file), `user.name`, `user.id`
+- **UEBA**: последовательности команд — основа скоринга по поведению CLI; отклонения от baseline → сигнал
+
+#### `last_logins` (интервал: 300 сек, профиль: both)
+
+```sql
+SELECT username, tty, host AS source_host, time, type FROM last WHERE type IN (7,8);
+```
+
+- `event.dataset: osquery.last`
+- `type=7` → `event.action: user_login`, `event.type: start`
+- `type=8` → `event.action: user_logout`, `event.type: end`
+- ECS: `user.name`, `source.ip` (source_host), `user.terminal` (tty)
+- **UEBA**: кросс-сверка с auditd USER_LOGIN; выявление сессий без auditd-записи
+
+#### `preload_envs` (интервал: 60 сек, профиль: both)
+
+```sql
+SELECT pe.pid, pe.key, pe.value, p.name, p.path, p.cmdline
+FROM process_envs pe JOIN processes p ON p.pid = pe.pid
+WHERE pe.key IN ('LD_PRELOAD','LD_AUDIT','LD_LIBRARY_PATH') AND pe.value != '';
+```
+
+- `event.action: preload_env_set`, `event.category: process`
+- ECS: `process.pid`, `process.name`, `process.executable`, `process.command_line`, `process.env.key`, `process.env.value`
+- **УЯЗВИМОСТЬ**: без WHERE-фильтра → десятки тысяч строк/ч. Фильтр обязателен.
+- **UEBA**: ненулевой LD_PRELOAD у нестандартного бинаря → preload injection
+
+#### `python_packages_diff` / `npm_packages_diff` / `pip_packages_diff` (интервал: 7200 сек, профиль: both)
+
+```sql
+SELECT name, version, path FROM python_packages;  -- аналогично npm_packages, pip_packages
+```
+
+- `action: added` → `event.action: package_installed`, `event.type: installation`
+- `action: removed` → `event.action: package_removed`, `event.type: deletion`
+- ECS: `package.name`, `package.version`, `package.path`
+- `event.dataset`: `osquery.python_packages` / `osquery.npm_packages` / `osquery.pip_packages`
+- **UEBA**: supply-chain — новый пакет вне change management → скоринг; typosquatting-детект по имени
+
+#### `deb_packages_diff` (интервал: 3600 сек, профиль: both)
+
+```sql
+SELECT name, version, arch FROM deb_packages;
+```
+
+- `event.action: package_installed / package_removed`, `event.category: package`
+- ECS: `package.name`, `package.version`, `package.architecture`
+- **UEBA**: неавторизованная установка deb-пакета → риск persistence
+
+#### `kernel_keys_diff` (интервал: 600 сек, профиль: both)
+
+```sql
+SELECT * FROM kernel_keys;
+```
+
+- Колонки osquery: `serial`, `type`, `description`, `uid`, `gid`
+- `event.action: kernel_key_added / kernel_key_removed`, `event.category: iam`
+- ECS: `user.name` (generic extractor), `user.id`
+- **UEBA**: нестандартный ключ в keyring → Kerberos-атака / credential caching
+
+#### `sudoers_diff` (интервал: 1800 сек, профиль: both)
+
+```sql
+SELECT * FROM sudoers;
+```
+
+- `event.action: sudoers_modified`, `event.category: iam`, `event.type: change`
+- **Замечание**: существующий запрос `sudoers` (120 сек) продолжает работать. `sudoers_diff` — более редкий diff с `removed: false` отключённым.
+- **UEBA**: изменение sudoers → privilege escalation подготовка
+
+#### `acpi_tables_diff` (интервал: 86400 сек, профиль: both)
+
+```sql
+SELECT * FROM acpi_tables;
+```
+
+- `event.action: acpi_table_added / acpi_table_removed`, `event.category: host`, `event.type: change`
+- **UEBA**: низкочастотный детект firmware tamper; изменение ACPI-таблицы → буткит-индикатор
+
+#### `suspicious_mmap` (интервал: 300 сек, профиль: both)
+
+```sql
+SELECT pmm.pid, pmm.path, pmm.start, pmm.end, p.name AS process_name
+FROM process_memory_map pmm JOIN processes p ON p.pid = pmm.pid
+WHERE pmm.path != ''
+  AND pmm.path NOT LIKE '/usr/%'
+  AND pmm.path NOT LIKE '/lib/%'
+  AND pmm.path NOT LIKE '/lib64/%'
+  AND pmm.path NOT LIKE '[%';
+```
+
+- `event.action: non_standard_mmap`, `event.category: process`, `event.type: info`
+- ECS: `process.pid`, `process.name`, `file.path` (pmm.path)
+- **UEBA**: не-стандартный .so в адресном пространстве → инъекция / reflective loading
+
+#### `chrome_extensions_diff` (интервал: 3600 сек, профиль: workstation only)
+
+```sql
+SELECT uid, name, version, identifier, path FROM users CROSS JOIN chrome_extensions USING (uid);
+```
+
+- `event.action: extension_installed / extension_removed`, `event.category: configuration`
+- ECS: `package.name`, `package.version`, `package.identifier`, `user.id`
+- **UEBA**: новое расширение без IT-авторизации → информационный хищник / infostealer
+
+#### `firefox_addons_diff` (интервал: 3600 сек, профиль: workstation only)
+
+```sql
+SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons USING (uid);
+```
+
+- `event.action: addon_installed / addon_removed`, `event.category: configuration`
+- ECS: `package.name`, `package.version`, `package.identifier`, `user.id`
+- **UEBA**: аналогично chrome_extensions_diff
+
+---
+
 ### 4.4 Гарантированные ECS-поля (все osquery события)
 
 | Поле | Описание |
@@ -332,6 +462,18 @@ CA и self-signed сертификаты из системного хранил�
 | `osquery.result.host_identifier` | hostname из osquery |
 | `osquery.<column>` | все колонки запроса в flat-namespace |
 | `tags` | `["osquery","security","linux"]` |
+
+**Namespace'ы P2-02 (присутствуют только для соответствующих запросов):**
+
+| Поле | Запросы |
+|------|---------|
+| `package.name` | python/npm/pip/deb_packages_diff, chrome_extensions_diff, firefox_addons_diff |
+| `package.version` | те же |
+| `package.path` | python/npm/pip_packages_diff |
+| `package.architecture` | deb_packages_diff |
+| `package.identifier` | chrome_extensions_diff, firefox_addons_diff |
+| `process.env.key` | preload_envs (LD_PRELOAD/LD_AUDIT/LD_LIBRARY_PATH) |
+| `process.env.value` | preload_envs |
 
 ### 4.5 BPF backend — event-driven таблицы (только docker-хосты)
 

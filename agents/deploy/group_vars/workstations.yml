@@ -1,0 +1,4 @@
+---
+# Переопределяет osquery_profile для группы [workstations].
+# Добавляет chrome_extensions_diff и firefox_addons_diff в osquery schedule.
+osquery_profile: workstation

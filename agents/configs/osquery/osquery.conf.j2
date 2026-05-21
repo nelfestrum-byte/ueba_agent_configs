@@ -158,7 +158,98 @@
     "etc_hosts": {
       "query": "SELECT address, hostnames, (SELECT hostname FROM system_info) AS hostname FROM etc_hosts WHERE address NOT IN ('127.0.0.1', '::1', '127.0.1.1', 'fe00::0', 'ff00::0', 'ff02::1', 'ff02::2', 'ff02::3')",
       "interval": 120
-    }{% if osquery_bpf_events_enabled | default(false) %},
+    },
+
+    "shell_history": {
+      "query": "SELECT uid, username, command, history_file FROM shell_history;",
+      "interval": 300,
+      "removed": false,
+      "description": "User command history (bash/zsh) — UEBA sequence anomalies (P2-02)"
+    },
+
+    "last_logins": {
+      "query": "SELECT username, tty, host AS source_host, time, type FROM last WHERE type IN (7,8);",
+      "interval": 300,
+      "removed": false,
+      "description": "User login/logout sessions from utmp/wtmp — cross-check with auditd USER_LOGIN (P2-02)"
+    },
+
+    "preload_envs": {
+      "query": "SELECT pe.pid, pe.key, pe.value, p.name AS process_name, p.path AS process_path, p.cmdline FROM process_envs pe JOIN processes p ON p.pid = pe.pid WHERE pe.key IN ('LD_PRELOAD','LD_AUDIT','LD_LIBRARY_PATH') AND pe.value != '';",
+      "interval": 60,
+      "removed": false,
+      "description": "Processes with LD_PRELOAD/LD_AUDIT/LD_LIBRARY_PATH set — preload injection detection (P2-02)"
+    },
+
+    "python_packages_diff": {
+      "query": "SELECT name, version, path FROM python_packages;",
+      "interval": 7200,
+      "removed": false,
+      "description": "Installed Python packages diff — supply-chain visibility (P2-02)"
+    },
+
+    "npm_packages_diff": {
+      "query": "SELECT name, version, path FROM npm_packages;",
+      "interval": 7200,
+      "removed": false,
+      "description": "Installed npm packages diff — supply-chain visibility (P2-02)"
+    },
+
+    "pip_packages_diff": {
+      "query": "SELECT name, version, path FROM pip_packages;",
+      "interval": 7200,
+      "removed": false,
+      "description": "Installed pip packages diff — supply-chain visibility (P2-02)"
+    },
+
+    "kernel_keys_diff": {
+      "query": "SELECT * FROM kernel_keys;",
+      "interval": 600,
+      "removed": false,
+      "description": "Kernel keyring entries (Kerberos/keychain credentials) (P2-02)"
+    },
+
+    "deb_packages_diff": {
+      "query": "SELECT name, version, arch FROM deb_packages;",
+      "interval": 3600,
+      "removed": false,
+      "description": "Installed deb packages diff — software inventory (P2-02)"
+    },
+
+    "acpi_tables_diff": {
+      "query": "SELECT * FROM acpi_tables;",
+      "interval": 86400,
+      "removed": false,
+      "description": "ACPI firmware tables — low-frequency tamper detection (P2-02)"
+    },
+
+    "sudoers_diff": {
+      "query": "SELECT * FROM sudoers;",
+      "interval": 1800,
+      "removed": false,
+      "description": "Sudoers rules diff — persistence / privilege escalation detection (P2-02)"
+    },
+
+    "suspicious_mmap": {
+      "query": "SELECT pmm.pid, pmm.path, pmm.start, pmm.end, p.name AS process_name FROM process_memory_map pmm JOIN processes p ON p.pid = pmm.pid WHERE pmm.path != '' AND pmm.path NOT LIKE '/usr/%' AND pmm.path NOT LIKE '/lib/%' AND pmm.path NOT LIKE '/lib64/%' AND pmm.path NOT LIKE '[%';",
+      "interval": 300,
+      "removed": false,
+      "description": "Non-standard shared objects mmap'd by processes — injection detection (P2-02)"
+    }{% if osquery_profile == 'workstation' %},
+
+    "chrome_extensions_diff": {
+      "query": "SELECT uid, name, version, identifier, path FROM users CROSS JOIN chrome_extensions USING (uid);",
+      "interval": 3600,
+      "removed": false,
+      "description": "Chrome extensions per user — workstation only (P2-02)"
+    },
+
+    "firefox_addons_diff": {
+      "query": "SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons USING (uid);",
+      "interval": 3600,
+      "removed": false,
+      "description": "Firefox addons per user — workstation only (P2-02)"
+    }{% endif %}{% if osquery_bpf_events_enabled | default(false) %},
 
     "docker_containers": {
       "query": "SELECT id, name, image, image_id, status, pid, (SELECT hostname FROM system_info) AS hostname FROM docker_containers WHERE status = 'running'",

@@ -255,6 +255,19 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 **container_cache в osquery_enrich.lua:** in-memory словарь `cid[12] → {name, image}`. Заполняется из diff-событий `docker_containers`. `bpf_process_events` и `bpf_socket_events` используют кэш для резолвинга `container.name` / `container.image.name` / `container.entity_id`. Кэш теряется при рестарте fluent-bit — первые BPF-события после рестарта не получат container-атрибуцию.
 
+### Профили osquery и shell_history (P2-02)
+
+**Профильная переменная:** `osquery_profile` в `agents/deploy/group_vars/all.yml` (default: `server`). Переопределяется через `group_vars/workstations.yml` (`workstation`).
+
+**Матрица запросов по профилям:**
+
+| Запросы | server | workstation |
+|---------|--------|-------------|
+| shell_history, last_logins, preload_envs, python/npm/pip/deb_packages_diff, kernel_keys_diff, sudoers_diff, acpi_tables_diff, suspicious_mmap | ✓ | ✓ |
+| chrome_extensions_diff, firefox_addons_diff | — | ✓ |
+
+**shell_history и приватность:** `shell_history` читает `~/.bash_history` / `~/.zsh_history` всех пользователей. Маскирование `--password=`, `--token=`, `--api-key=` в Lua **не применяется** (отключено по решению проекта) — raw command lines попадают в `fluent-osquery-*`. При изменении политики — добавить `gsub`-паттерны в `osquery_enrich.lua` блок `shell_history`.
+
 ---
 
 ## Что НЕ читать

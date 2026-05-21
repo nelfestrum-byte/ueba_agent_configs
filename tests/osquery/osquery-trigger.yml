@@ -38,6 +38,10 @@
     test_mount_dir:     /mnt/osq-test-mount
     test_listener_port: 19876
     test_listener_pid:  /tmp/osq-listener.pid
+    test_pip_package:   "requests==2.25.0"
+    test_history_file:  "/root/.bash_history"
+    test_history_line:  "echo aud-trig-marker"
+    test_sudoers_diff_file: /etc/sudoers.d/osq-test-diff
 
   tasks:
 
@@ -207,6 +211,45 @@
           register: _listener
           changed_when: "'started' in _listener.stdout"
 
+        # TABLE: pip_packages_diff (7200s) — trigger: install test package
+        - name: "[apply] pip_packages_diff — установить тестовый пакет"
+          ansible.builtin.command: pip install --break-system-packages --user {{ test_pip_package }}
+          changed_when: false
+          ignore_errors: true
+          tags: [apply, key_pip_packages]
+
+        # TABLE: shell_history (300s) — trigger: append line to bash_history
+        - name: "[apply] shell_history — добавить строку в ~/.bash_history"
+          ansible.builtin.lineinfile:
+            path: "{{ test_history_file }}"
+            line: "{{ test_history_line }}"
+            create: yes
+          tags: [apply, key_shell_history]
+
+        # TABLE: preload_envs (60s) — trigger: run process with LD_PRELOAD
+        - name: "[apply] preload_envs — запустить процесс с LD_PRELOAD"
+          ansible.builtin.shell: |
+            LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libc.so.6 /bin/true || true
+          args:
+            executable: /bin/bash
+          changed_when: false
+          tags: [apply, key_preload_envs]
+
+        # TABLE: sudoers_diff (1800s) — add a second sudoers file
+        - name: "[apply] sudoers_diff — добавить файл sudoers (второй)"
+          ansible.builtin.copy:
+            dest: "{{ test_sudoers_diff_file }}"
+            content: |
+              # osquery-test diff — safe to delete
+              {{ test_user }} ALL=(ALL) NOPASSWD: /usr/bin/true
+            mode: '0440'
+            validate: 'visudo -cf %s'
+          tags: [apply, key_sudoers_diff]
+
+        # TABLE: deb_packages_diff (3600s) и kernel_keys_diff (600s) —
+        #   срабатывают от реальных изменений; тригеры выше уже создают пакеты.
+        #   Для kernel_keys_diff доп. артефакт не нужен — keyring меняется системой.
+
         - name: "[apply] ИТОГ"
           debug:
             msg:
@@ -225,6 +268,10 @@
               - "  mounts               : {{ test_mount_dir }} → /tmp"
               - "  iptables             : INPUT RETURN (comment osquery-test)"
               - "  listening_ports      : 0.0.0.0:{{ test_listener_port }}/tcp"
+              - "  pip_packages_diff    : {{ test_pip_package }}"
+              - "  shell_history        : {{ test_history_file }} ← '{{ test_history_line }}'"
+              - "  preload_envs         : LD_PRELOAD one-shot (no persistent artifact)"
+              - "  sudoers_diff         : {{ test_sudoers_diff_file }}"
               - "--------------------------------------------"
               - "Ждать max 300s, затем проверить:"
               - "  sudo grep osq-test /var/log/osquery/osqueryd.results.log"
@@ -325,6 +372,26 @@
           group:
             name: "{{ test_group }}"
             state: absent
+
+        - name: "[rollback] sudoers_diff — удалить файл"
+          ansible.builtin.file:
+            path: "{{ test_sudoers_diff_file }}"
+            state: absent
+          tags: [rollback, key_sudoers_diff]
+
+        - name: "[rollback] shell_history — удалить строку из bash_history"
+          ansible.builtin.lineinfile:
+            path: "{{ test_history_file }}"
+            line: "{{ test_history_line }}"
+            state: absent
+          ignore_errors: true
+          tags: [rollback, key_shell_history]
+
+        - name: "[rollback] pip_packages_diff — удалить тестовый пакет"
+          ansible.builtin.command: pip uninstall -y requests
+          changed_when: false
+          ignore_errors: true
+          tags: [rollback, key_pip_packages]
 
         - name: "[rollback] ИТОГ"
           debug:

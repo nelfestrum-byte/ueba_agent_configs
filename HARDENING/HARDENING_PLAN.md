@@ -24,7 +24,7 @@
 | P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | после P0-03 |
 | P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-04, P1-01 |
 | **P2-01** | **osquery BPF backend + docker_containers + container.entity_id — фундамент поведенческой модели контейнеров ✓ ВЫПОЛНЕНО 2026-05-21** | ~1.5 дня | cross-task с P0-04 (whitelist) |
-| P2-02 | Расширение osquery-запросов (shell_history, process_envs, supply-chain и пр.) | ~0.5 дня | опц. совмещать с P2-01 (.j2-template) |
+| **P2-02** | **Расширение osquery-запросов (shell_history, process_envs, supply-chain и пр.) ✓ ВЫПОЛНЕНО 2026-05-21** | ~0.5 дня | опц. совмещать с P2-01 (.j2-template) |
 | P3-01 | Unit-тесты Lua-скриптов (merge + enrich) — **отложено** | ~1 день | — |
 | P3-02 | CI: luacheck + syntax-check + dry-run | ~4 часа | — |
 | P3-03 | Property-based fuzz для merge-buffer | ~0.5 дня | требует P3-01 инфраструктуру |
@@ -845,7 +845,7 @@ ECS-маппинг: `event.module=osquery`, `event.dataset=osquery.bpf_process_e
 
 **Приоритет:** P2 (полнота покрытия для UEBA)
 **Стоимость:** ~0.5 дня
-**Статус:** не начато
+**Статус:** выполнено 2026-05-21
 **Зависимости:** опционально совмещать с P2-01 (если конфиг уже templatized в .j2 — расширения добавлять в общий шаблон с условиями per-profile).
 
 ### Зачем (P2-02)
