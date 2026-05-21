@@ -1,5 +1,5 @@
 ---
-# Развертывание UEBA-агентов: auditd + fluent-bit + filebeat + osquery (Debian/Ubuntu)
+# Развертывание UEBA-агентов: auditd + fluent-bit + osquery (Debian/Ubuntu)
 #
 # Стек сбора audit-событий:
 #   auditd     — ядровый аудит (execve, sudo, auth, file_integrity)
@@ -13,7 +13,10 @@
 #                в ECS + osquery.* namespace → Logstash TCP 5047
 #                → OpenSearch индекс fluent-osquery-YYYY.MM.dd
 #
-# filebeat — только SSH аутентификация (/var/log/auth.log) → beats 5044
+# Стек сбора SSH auth:
+#   fluent-bit — читает /var/log/auth.log, нормализует sshd-строки через
+#                sshd_enrich.lua → Logstash TCP 5048
+#                → OpenSearch индекс system-auth-YYYY.MM.dd
 #
 # ВАЖНО: auditbeat и auditd не могут работать одновременно (конфликт за
 #        audit netlink-сокет). Плейбук останавливает и отключает auditbeat.
@@ -23,7 +26,7 @@
 #
 # Переменные: см. group_vars/all.yml (скопировать из all.yml.example)
 
-- name: Deploy UEBA agents (auditd + fluent-bit + filebeat + osquery)
+- name: Deploy UEBA agents (auditd + fluent-bit + osquery)
   hosts: ueba_agents
   become: true
   gather_facts: true
@@ -50,7 +53,6 @@
       loop:
         - /etc/audit/rules.d
         - /etc/fluent-bit/scripts
-        - /etc/filebeat
         - /etc/osquery
         - /var/log/osquery
         - /var/lib/fluent-bit/storage
@@ -69,23 +71,6 @@
       failed_when: false
 
     # ── 2. apt-репозитории (только в онлайн-режиме) ───────────────────────────
-
-    - name: Добавить GPG ключ Elastic
-      ansible.builtin.shell:
-        cmd: >
-          curl -fsSL {{ elastic_apt_key_url }}
-          | gpg --dearmor -o /usr/share/keyrings/elastic-keyring.gpg
-        creates: /usr/share/keyrings/elastic-keyring.gpg
-      when: not (use_local_packages | default(false))
-
-    - name: Добавить apt-репозиторий Elastic
-      ansible.builtin.apt_repository:
-        repo: >
-          deb [arch=amd64 signed-by=/usr/share/keyrings/elastic-keyring.gpg]
-          {{ elastic_apt_repo_url }} stable main
-        filename: elastic
-        state: present
-      when: not (use_local_packages | default(false))
 
     - name: Добавить GPG ключ osquery
       ansible.builtin.get_url:
@@ -106,12 +91,11 @@
     # ── 3. Установка пакетов ───────────────────────────────────────────────────
 
     # -- Онлайн: всё из подключённых репозиториев
-    - name: Установить auditd, filebeat, osquery, acl (онлайн)
+    - name: Установить auditd, osquery, acl (онлайн)
       ansible.builtin.apt:
         name:
           - auditd
           - audispd-plugins
-          - filebeat
           - osquery
           - acl
         state: latest
@@ -136,16 +120,14 @@
         mode: "0644"
       loop:
         - "{{ fluent_bit_local_deb }}"
-        - "{{ filebeat_local_deb }}"
         - "{{ osquery_local_deb }}"
       when: use_local_packages | default(false)
 
-    - name: Установить fluent-bit, filebeat, osquery из локальных .deb
+    - name: Установить fluent-bit, osquery из локальных .deb
       ansible.builtin.apt:
         deb: "/tmp/{{ item }}"
       loop:
         - "{{ fluent_bit_local_deb }}"
-        - "{{ filebeat_local_deb }}"
         - "{{ osquery_local_deb }}"
       when: use_local_packages | default(false)
 
@@ -155,7 +137,6 @@
         state: absent
       loop:
         - "{{ fluent_bit_local_deb }}"
-        - "{{ filebeat_local_deb }}"
         - "{{ osquery_local_deb }}"
       when: use_local_packages | default(false)
 
@@ -245,6 +226,15 @@
         mode: "0644"
       notify: restart fluent-bit
 
+    - name: Развернуть Lua-скрипт sshd_enrich.lua
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/sshd_enrich.lua
+        dest: /etc/fluent-bit/scripts/sshd_enrich.lua
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart fluent-bit
+
     - name: Развернуть общие Lua-утилиты proc_common.lua
       ansible.builtin.copy:
         src: ../configs/fluent-bit/scripts/proc_common.lua
@@ -263,7 +253,7 @@
         mode: "0640"
       notify: restart fluent-bit
 
-    - name: Добавить fluent-bit в группу adm (чтение /var/log/audit/audit.log)
+    - name: Добавить fluent-bit в группу adm (чтение audit.log и auth.log)
       ansible.builtin.user:
         name: fluent-bit
         groups: adm
@@ -294,36 +284,7 @@
         enabled: true
         state: started
 
-    # ── 6. filebeat ───────────────────────────────────────────────────────────
-
-    - name: Развернуть filebeat.yml
-      ansible.builtin.template:
-        src: ../configs/filebeat/filebeat.yml.j2
-        dest: /etc/filebeat/filebeat.yml
-        owner: root
-        group: root
-        mode: "0640"
-      notify: restart filebeat
-
-    - name: Добавить filebeat в группу adm (доступ к /var/log/auth.log)
-      ansible.builtin.user:
-        name: filebeat
-        groups: adm
-        append: true
-      notify: restart filebeat
-
-    - name: Валидировать конфиг filebeat
-      ansible.builtin.command:
-        cmd: filebeat test config
-      changed_when: false
-
-    - name: Включить и запустить filebeat
-      ansible.builtin.systemd:
-        name: filebeat
-        enabled: true
-        state: started
-
-    # ── 7. osquery ─────────────────────────────────────────────────────────────
+    # ── 6. osquery ─────────────────────────────────────────────────────────────
 
     - name: Развернуть конфиг osquery
       ansible.builtin.copy:
@@ -366,11 +327,6 @@
     - name: restart fluent-bit
       ansible.builtin.systemd:
         name: fluent-bit
-        state: restarted
-
-    - name: restart filebeat
-      ansible.builtin.systemd:
-        name: filebeat
         state: restarted
 
     - name: restart osqueryd

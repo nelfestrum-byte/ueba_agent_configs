@@ -3,7 +3,7 @@
 # Переменные развертывания UEBA-агентов
 # =============================================================================
 
-# Адрес Logstash (IP или hostname) — порт 5044 задаётся в плейбуке
+# Адрес Logstash (IP или hostname) — порт задаётся в fluent-bit.conf
 logstash_host: logstash.example.local
 
 # =============================================================================
@@ -24,15 +24,6 @@ use_local_packages: true
 # Версии пакетов и имена .deb файлов (для use_local_packages: true)
 # =============================================================================
 
-# Elastic Beats — filebeat
-elastic_version: "9.4.1"
-
-# Архитектуры: amd64 или arm64 — должны соответствовать целевым хостам
-filebeat_arch: "amd64"
-
-# Имя файла filebeat в agents/deploy/files/
-filebeat_local_deb: "filebeat-oss-{{ elastic_version }}-{{ filebeat_arch }}.deb"
-
 # fluent-bit — отдельная схема именования: fluent-bit_{version}_amd64.deb
 fluent_bit_version:  "5.0.5"
 fluent_bit_local_deb: "fluent-bit_{{ fluent_bit_version }}_amd64.deb"
@@ -46,11 +37,7 @@ osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
 # =============================================================================
 #
 # Для изолированных сетей замените на внутреннее зеркало:
-#   elastic_apt_repo_url: "http://mirror.example.local/elastic/9.x/apt"
 #   osquery_apt_repo_url: "http://mirror.example.local/osquery/deb"
-
-elastic_apt_key_url: "https://artifacts.elastic.co/GPG-KEY-elasticsearch"
-elastic_apt_repo_url: "https://artifacts.elastic.co/packages/9.x/apt"
 
 osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
 osquery_apt_repo_url: "https://pkg.osquery.io/deb"

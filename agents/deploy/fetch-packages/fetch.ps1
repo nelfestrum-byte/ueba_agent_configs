@@ -1,15 +1,15 @@
-# Скачать auditbeat + filebeat + osquery .deb через Docker
+# Скачать fluent-bit + osquery .deb через Docker
 # Результат кладётся в agents/deploy/files/
 #
 # Использование:
 #   .\fetch.ps1                                             # версии по умолчанию
-#   .\fetch.ps1 -ElasticVersion 9.4.1 -OsqueryVersion 5.23.0
+#   .\fetch.ps1 -FluentBitVersion 5.0.5 -OsqueryVersion 5.23.0
 #
 # Требования: Docker Desktop запущен
 
 param(
-    [string]$ElasticVersion = "9.4.1",
-    [string]$OsqueryVersion = "5.23.0"
+    [string]$FluentBitVersion = "5.0.5",
+    [string]$OsqueryVersion   = "5.23.0"
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -24,9 +24,9 @@ if (-not (Test-Path $FilesDir)) {
     New-Item -ItemType Directory -Force $FilesDir | Out-Null
 }
 
-Write-Host "[1/3] Building image (ELASTIC_VERSION=$ElasticVersion OSQUERY_VERSION=$OsqueryVersion)..."
+Write-Host "[1/3] Building image (FLUENT_BIT_VERSION=$FluentBitVersion OSQUERY_VERSION=$OsqueryVersion)..."
 docker build `
-    --build-arg "ELASTIC_VERSION=$ElasticVersion" `
+    --build-arg "FLUENT_BIT_VERSION=$FluentBitVersion" `
     --build-arg "OSQUERY_VERSION=$OsqueryVersion" `
     -t $ImageName $FetchDir
 if ($LASTEXITCODE -ne 0) { throw "docker build failed (exit $LASTEXITCODE)" }
@@ -55,14 +55,5 @@ $Debs | Format-Table Name, @{Label="MB"; Expression={ [math]::Round($_.Length/1M
 Write-Host ""
 Write-Host "Пропишите в agents/deploy/group_vars/all.yml:"
 Write-Host "  use_local_packages: true"
-Write-Host "  elastic_version: `"$ElasticVersion`""
+Write-Host "  fluent_bit_version: `"$FluentBitVersion`""
 Write-Host "  osquery_version: `"$OsqueryVersion`""
-
-foreach ($f in $Debs) {
-    if ($f.Name -match "^auditbeat-(.+)-(amd64|arm64)\.deb$") {
-        Write-Host "  auditbeat_arch: `"$($Matches[2])`""
-    }
-    if ($f.Name -match "^filebeat-(.+)-(amd64|arm64)\.deb$") {
-        Write-Host "  filebeat_arch: `"$($Matches[2])`""
-    }
-}

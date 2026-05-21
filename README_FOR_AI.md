@@ -15,7 +15,7 @@
 
 - **Базовые линии**: osquery diff позволяет строить baseline (типичные процессы, соединения, пользователи)
 - **Аномалии**: auditd execve + syscall-трассировка — основа для детектирования аномального поведения
-- **Идентичность**: user.id / user.name сквозные через все источники (auditd auid, osquery uid, filebeat auth)
+- **Идентичность**: user.id / user.name сквозные через все источники (auditd auid, osquery uid, system.auth)
 - **Граф сущностей**: host.name + process.pid + user.name + destination.ip → граф для UEBA
 
 ---
@@ -27,7 +27,7 @@
 ─────────────────────────────────────────────────────────────────
 auditd            fluent-bit TCP 5045    fluent-audit-YYYY.MM.dd
 osquery           fluent-bit TCP 5047    fluent-osquery-YYYY.MM.dd
-filebeat [врем.]  beats TCP 5044         filebeat-{ver}-YYYY.MM.dd
+auth.log (sshd)   fluent-bit TCP 5048    system-auth-YYYY.MM.dd
 ```
 
 Все события проходят через **Logstash** (маршрутизация + type-cast) до записи в OpenSearch.
@@ -335,32 +335,65 @@ CA и self-signed сертификаты из системного хранил�
 
 ---
 
-## 5. Источник: filebeat — SSH auth *(временный компонент)*
+## 5. Источник: fluent-bit SSH auth (индекс `system-auth-*`)
 
-> **Статус: временный.** filebeat используется только для `/var/log/auth.log` (SSH аутентификация).
-> Планируется замена на fluent-bit pipeline с Lua-нормализацией для единообразия стека.
+Читает `/var/log/auth.log` через `tail` input с парсером `syslog_sshd`.
+Нормализация выполняется **sshd_enrich.lua** — только sshd-строки; прочие
+(su, CRON, sudo через PAM) проходят с `event.action = "other"`.
 
 ### 5.1 Что собирается
 
-Модуль `system/auth` filebeat читает `/var/log/auth.log` и нормализует в ECS:
-- SSH successful login / failed login
-- sudo events (дублирует часть auditd, но с parsed message)
-- PAM authentication events
+- SSH successful login (password, publickey)
+- SSH failed login + invalid user
+- SSH session open / close
+- SSH disconnect preauth, connection closed
+- PAM authentication failures
 
-### 5.2 Ключевые ECS-поля (filebeat system/auth)
+### 5.2 Форматы строк и event.action
 
-| Поле | Описание |
-|------|---------|
-| `event.dataset` | `"system.auth"` |
-| `event.outcome` | success / failure |
-| `user.name` | имя пользователя |
-| `source.ip` | IP источника подключения (SSH) |
-| `source.geo.*` | геолокация (если настроен GeoIP) |
-| `host.name` | имя хоста |
+| Шаблон строки auth.log | `event.action` | `event.outcome` | `event.type` |
+|---|---|---|---|
+| `Failed password for invalid user <u> from <ip> port <p>` | `ssh_login_failed` | `failure` | `start` |
+| `Failed password for <u> from <ip> port <p>` | `ssh_login_failed` | `failure` | `start` |
+| `Accepted password for <u> from <ip> port <p>` | `ssh_login` | `success` | `start` |
+| `Accepted publickey for <u> from <ip> port <p>` | `ssh_login` | `success` | `start` |
+| `session opened for user <u>` | `session_opened` | `success` | `start` |
+| `session closed for user <u>` | `session_closed` | `success` | `end` |
+| `Invalid user <u> from <ip> port <p>` | `invalid_user` | `failure` | `start` |
+| `Disconnected from authenticating user <u> <ip> port <p> [preauth]` | `ssh_disconnect_preauth` | `failure` | `end` |
+| `Connection closed by authenticating user <u> <ip> port <p>` | `ssh_connection_closed` | — | `end` |
+| `Connection closed by <ip> port <p>` | `ssh_connection_closed` | — | `end` |
+| `PAM N more authentication failure` | `pam_auth_failure` | `failure` | `info` |
+| прочие строки | `other` | — | `info` |
 
-### 5.3 Индекс
+### 5.3 Гарантированные ECS-поля
 
-`filebeat-{version}-YYYY.MM.dd` — стандартная схема filebeat.
+| Поле | Тип | Условие | Описание |
+|------|-----|---------|---------|
+| `ecs.version` | keyword | всегда | `"8.11"` |
+| `event.kind` | keyword | всегда | `"event"` |
+| `event.dataset` | keyword | всегда | `"system.auth"` |
+| `event.module` | keyword | всегда | `"system"` |
+| `event.category` | keyword | всегда | `"authentication"` |
+| `event.action` | keyword | всегда | см. таблицу выше |
+| `event.type` | keyword | всегда | start / end / info |
+| `event.outcome` | keyword | если применимо | success / failure |
+| `process.name` | keyword | всегда | `"sshd"` |
+| `process.pid` | integer | если pid в строке | PID sshd-процесса |
+| `user.name` | keyword | если извлечён | имя пользователя |
+| `related.user` | keyword[] | если user.name | `[user.name]` |
+| `source.ip` | ip | если извлечён | IP подключения |
+| `source.port` | integer | если извлечён | порт подключения |
+| `related.ip` | keyword[] | если source.ip | `[source.ip]` |
+| `host.name` | keyword | всегда | FQDN хоста (из `hostname -f`) |
+| `host.os.type` | keyword | всегда | `"linux"` |
+| `host.os.family` | keyword | всегда | `"linux"` |
+| `tags` | keyword[] | всегда | `["system-auth","fluent-bit","linux"]` |
+| `@timestamp` | date | всегда | время из строки auth.log (год = текущий) |
+
+### 5.4 Индекс
+
+`system-auth-YYYY.MM.dd` — динамический маппинг (без index template до P1-02).
 
 ---
 
@@ -377,7 +410,7 @@ CA и self-signed сертификаты из системного хранил�
 | Сессия пользователя | `user.session.id` | auditd, osquery — **join корректен**: одинаковая формула FNV-1a(host.name:btime:ses); объединяет все события от логина до выхода |
 | Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed |
 | Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
-| Исходный IP (SSH) | `source.ip` | filebeat, osquery logged_in_users |
+| Исходный IP (SSH) | `source.ip` | system-auth (fluent-bit), osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections |
 | Команда | `process.command_line` | auditd (execve), osquery processes |
 
@@ -404,6 +437,7 @@ CA и self-signed сертификаты из системного хранил�
 | `agents/configs/osquery/osquery.conf` | Полный список запросов и их SQL — источник schema |
 | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | Маппинг запросов → ECS категории/действия |
 | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг |
+| `agents/configs/fluent-bit/scripts/sshd_enrich.lua` | ECS-нормализация auth.log sshd-строк → system-auth |
 | `logstash/configs/pipeline/ueba-main.conf` | Входящие порты, type-cast, индексы |
 | `agents/configs/auditd/audit.rules` | Что именно перехватывает auditd (фильтр событий) |
 | `opensearch/templates/fluent-audit.json` | Точные типы ECS-полей в auditd-индексе (`wildcard`, `ip`, `date`, `integer`) |
