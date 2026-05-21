@@ -98,9 +98,9 @@ local PATTERNS = {
 -- ── Main function ─────────────────────────────────────────────────────────────
 function enrich_sshd(tag, timestamp, record)
 
-    -- Only process sshd messages; leave others unmodified
+    -- Accept both "sshd" (listener) and "sshd-session" (OpenSSH 9.x per-connection process)
     local prog = record["program"] or ""
-    if prog ~= "sshd" then
+    if prog ~= "sshd" and prog ~= "sshd-session" then
         return 0, timestamp, record
     end
 
