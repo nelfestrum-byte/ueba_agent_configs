@@ -18,3 +18,6 @@ agents/deploy/files/*.deb
 
 # Тесты — рабочий инвентори создаётся из *.example
 tests/osquery/inventory.ini
+
+# Сборка
+dist/*
