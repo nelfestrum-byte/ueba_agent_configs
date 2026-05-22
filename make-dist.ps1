@@ -17,7 +17,7 @@ if (-not $?) {
     exit 1
 }
 
-git archive HEAD --format=zip -o $outFile
+git archive HEAD --worktree-attributes --format=zip -o $outFile
 if (-not $?) {
     Write-Error "git archive failed."
     exit 1
