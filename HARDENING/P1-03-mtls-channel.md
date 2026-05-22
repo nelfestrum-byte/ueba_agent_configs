@@ -41,10 +41,10 @@
    openssl version
    ```
 
-2. Проверить версию Logstash на dev-стенде:
+2. Проверить версию Logstash (на Logstash-хосте):
 
    ```bash
-   docker compose -f dev_stand/docker-compose.yml exec logstash logstash --version
+   docker exec ueba-logstash logstash --version
    ```
 
    `tcp { ssl_enabled => true ... }` поддерживается на Logstash >= 7.x. Если используется старая версия — проверить синтаксис (`ssl_enable` vs `ssl_enabled`).

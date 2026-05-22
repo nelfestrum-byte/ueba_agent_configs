@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 # Creates an anonymized client distribution archive from the current git HEAD.
 # Excluded via .gitattributes export-ignore: HARDENING/, CLAUDE.md, README_FOR_AI.md,
-# CONTAINER_BEHAVIOR_PLAN.md, dev_stand/, tests/, .claude/
+# docs/, tests/, .claude/
 
 $date   = Get-Date -Format "yyyy-MM-dd"
 $outDir = Join-Path $PSScriptRoot "dist"

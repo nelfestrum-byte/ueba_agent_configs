@@ -41,7 +41,7 @@ osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
 # Формат: MAJOR.MINOR.PATCH — MAJOR при breaking changes схемы,
 #          MINOR при новых полях, PATCH при bugfix.
 #
-fluent_config_version: "1.0.0"
+fluent_config_version: "0.9"
 
 # =============================================================================
 # URL репозиториев (используются только при use_local_packages: false)

@@ -1,5 +1,7 @@
 # UEBA — стенд сбора событий безопасности
 
+**Версия:** 0.9 · [Release Notes](docs/RELEASE_NOTES_0.9.md)
+
 Инфраструктурная основа для UEBA-системы (User and Entity Behavior Analytics) со скорингом.
 Собирает события с Linux-хостов, нормализует в **ECS 8.x** (Elastic Common Schema) и пишет в OpenSearch.
 
@@ -146,22 +148,6 @@ systemctl status auditd fluent-bit osqueryd
 # Метрики fluent-bit (pipeline health, состояние Lua-скриптов):
 curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 ```
-
----
-
-### 3. Dev-стенд (OpenSearch + Logstash локально)
-
-Для разработки и тестирования пайплайна без реальных агентов:
-
-```bash
-cd dev_stand
-docker compose up -d
-docker compose logs -f logstash
-```
-
-OpenSearch Dashboards: http://localhost:5601
-
-Тестовые события: `dev_stand/scripts/send-auditd.sh`, `dev_stand/scripts/send-osquery.sh`.
 
 ---
 

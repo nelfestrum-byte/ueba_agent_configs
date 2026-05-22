@@ -13,11 +13,10 @@
 
 Все задачи hardening и подробные ТЗ для AI-агентов лежат в [HARDENING/](HARDENING/README.md):
 
-- [HARDENING/HARDENING_PLAN.md](HARDENING/HARDENING_PLAN.md) — мастер-план: 13 задач + Extras, шкала приоритетов, обоснования, грабли.
-- `HARDENING/PX-NN-<slug>.md` — самодостаточные промпты для исполнения по одной итерации.
+- [HARDENING/HARDENING_PLAN.md](HARDENING/HARDENING_PLAN.md) — оставшиеся задачи: P1-03, P1-04, P3-01, P3-02, P3-03. Выполненные задачи v0.9 описаны в [docs/RELEASE_NOTES_0.9.md](docs/RELEASE_NOTES_0.9.md).
+- `HARDENING/PX-NN-<slug>.md` — промпты для исполнения по одной итерации (сейчас: P1-03, P1-04).
+- [HARDENING/CONTAINER_BEHAVIOR_PLAN.md](HARDENING/CONTAINER_BEHAVIOR_PLAN.md) — план поведенческой модели контейнеров (P4).
 - См. [HARDENING/README.md](HARDENING/README.md) для порядка исполнения и принципов.
-
-Текущие промпты написаны на **P0 и P1**. P2/P3/P4 описаны только в плане — промпты добавляются по мере приближения горизонта.
 
 ## Справочник по данным для AI-агентов
 
@@ -66,7 +65,7 @@ ueba-stand/
 │   │   │       ├── auditd_merge.lua     — объединение событий по serial number
 │   │   │       ├── auditd_enrich.lua    — обогащение в ECS + MITRE ATT&CK теги
 │   │   │       └── osquery_enrich.lua   — ECS-обогащение osquery diff-событий
-│   │   └── osquery/osquery.conf         — diff-запросы (без count/snapshot метрик)
+│   │   └── osquery/osquery.conf.j2      — Jinja2-шаблон конфига osquery (BPF backend per-group)
 │   └── deploy/
 │       ├── agents-deploy.yml            — Ansible плейбук (auditd + fluent-bit + osquery)
 │       ├── agents-deploy-legacy.yml     — архив старого плейбука
@@ -78,13 +77,8 @@ ueba-stand/
 │           ├── fetch.ps1
 │           └── Dockerfile
 │
-├── dev_stand/
-│   ├── README.md
-│   ├── docker-compose.yml               — OpenSearch + Dashboards + Logstash
-│   ├── opensearch/opensearch.yml
-│   └── scripts/                         — семплы событий для ручной отправки
-│       ├── send-auditd.sh
-│       └── send-osquery.sh
+├── docs/
+│   └── RELEASE_NOTES_0.9.md             — Release notes v0.9 для человека
 │
 ├── opensearch/
 │   └── templates/
@@ -109,11 +103,11 @@ ueba-stand/
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id` |
 | **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd |
-| **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
+| **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
-| **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb |
-| **Dev-стенд** | `dev_stand/docker-compose.yml` | Локальный прогон без агентов |
-| **Index templates** | `opensearch/templates/*.json` | Маппинги ECS 8.11 для всех индексов; применяются вручную через REST API |
+| **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb, osquery_profile |
+| **Index templates** | `opensearch/templates/*.json` | Маппинги ECS 8.11 v2.0 для всех индексов; применяются через logstash-deploy.yml |
+| **Release Notes** | `docs/RELEASE_NOTES_0.9.md` | Human-readable описание v0.9 |
 
 ## Индексы OpenSearch
 
@@ -149,8 +143,7 @@ ueba-stand/
 1. Grep в logstash/configs/pipeline/ueba-main.conf
 2. Read 10–15 строк вокруг найденного
 3. Edit нужный блок
-4. Dev: cd dev_stand && docker compose restart logstash
-5. Прод: cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
+4. Прод: cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
 ### Изменить конфиг агентов (auditd / fluent-bit / osquery)
@@ -186,15 +179,8 @@ ueba-stand/
 ## Команды для быстрого старта
 
 ```bash
-# Dev-стенд
-cd dev_stand && docker compose up -d
-docker compose logs -f logstash
-
-# Перезапустить Logstash после правки конфига (dev)
-docker compose restart logstash
-
 # Проверка индексов OpenSearch
-curl -s 'http://localhost:9200/_cat/indices?v&index=fluent-audit-*,fluent-osquery-*' | sort
+curl -s 'http://opensearch:9200/_cat/indices?v&index=fluent-audit-*,fluent-osquery-*' | sort
 
 # Деплой Logstash в прод
 cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass
@@ -235,7 +221,7 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 ### exit-события короткоживущих процессов
 Если процесс завершился до того, как enrich обработал его exit-событие, `/proc/<pid>/stat` уже недоступен и кэша нет → `start_time` берётся из `@timestamp` события. Поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует об этом. `process.entity_id` такого события **не совпадёт** с osquery — это known limitation.
 
-### osquery BPF backend — матрица групп и cross-task с P0-03 (P2-01)
+### osquery BPF backend — матрица групп и whitelist для bpf-правила
 
 **Матрица:**
 
@@ -246,7 +232,7 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 **Требования на docker-хостах:** ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6. Pre-flight assert в плейбуке.
 
-**Cross-task с P0-03 (audit-правило `-S bpf`):** P0-03 содержит правило `auditd -S bpf`. Когда osqueryd загружает BPF-программы — он сам триггерит это правило → события попадают в fluent-bit → snowball feedback loop. Решение: добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`. Это отдельный маленький коммит — **не смешивать с P2-01**. P0-03 сейчас имеет баги (события с хоста не доходят до Logstash) — whitelist актуален при их устранении.
+**Feedback loop с auditd `-S bpf`:** osqueryd при загрузке BPF-программ триггерит правило `-S bpf` в audit.rules → события попадают в fluent-bit → snowball. Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd` (отдельный коммит, не смешивать с другими задачами).
 
 **container_cache в osquery_enrich.lua:** in-memory словарь `cid[12] → {name, image}`. Заполняется из diff-событий `docker_containers`. `bpf_process_events` и `bpf_socket_events` используют кэш для резолвинга `container.name` / `container.image.name` / `container.entity_id`. Кэш теряется при рестарте fluent-bit — первые BPF-события после рестарта не получат container-атрибуцию.
 
@@ -263,21 +249,21 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 **shell_history и приватность:** `shell_history` читает `~/.bash_history` / `~/.zsh_history` всех пользователей. Маскирование `--password=`, `--token=`, `--api-key=` в Lua **не применяется** (отключено по решению проекта) — raw command lines попадают в `fluent-osquery-*`. При изменении политики — добавить `gsub`-паттерны в `osquery_enrich.lua` блок `shell_history`.
 
-### P0-04 — auditd bpf-правило и osquery BPF backend (P2-01)
+### Auditd bpf-правило и osquery BPF backend
 
 Правило `-a always,exit -F arch=b64 -S bpf -F auid>=1000 -F auid!=unset -k ebpf_use` добавлено в P0-04 **без** whitelist'а osqueryd.
 
-При включении P2-01 (osquery BPF backend, группа `[docker_hosts]`) osqueryd начнёт загружать BPF-программы → будет триггерить это правило → feedback loop. **До включения P2-01 необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`**. Это отдельный коммит, не смешивать с P2-01.
+На хостах с включённым BPF backend (`[docker_hosts]`) osqueryd триггерит это правило при загрузке BPF-программ → feedback loop. **Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`** — отдельный коммит.
 
 ---
 
 ## Что НЕ читать
 
 - `.git/` — используйте `git log` вместо чтения объектов
-- `*.log` — используйте `docker compose logs -n 50` или `journalctl -n 50`
+- `*.log` — используйте `journalctl -n 50`
 - `agents/deploy/files/*.deb` — бинарные пакеты, в git не хранятся
 
 ---
 
 **Последнее обновление:** 2026-05-22
-**Версия проекта:** auditd+fluent-bit+osquery (pure fluent-bit стек) → Logstash → OpenSearch
+**Версия проекта:** 0.9 — auditd+fluent-bit+osquery (pure fluent-bit стек) → Logstash → OpenSearch

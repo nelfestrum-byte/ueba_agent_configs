@@ -4,7 +4,8 @@
   "_meta": {
     "description": "UEBA osquery diff events — ECS 8.11 + osquery.* namespace",
     "source": "ueba-stand/opensearch/templates",
-    "version": "2.0"
+    "version": "2.0",
+    "project_version": "0.9"
   },
   "template": {
     "settings": {
