@@ -59,6 +59,7 @@
         dest: "{{ deploy_dir }}/certs/opensearch-ca.pem"
         mode: "0644"
       register: cfg_ca_cert
+      when: opensearch_ssl | default('false') | bool
 
     - name: Развернуть .env с параметрами подключения
       ansible.builtin.template:
@@ -102,11 +103,11 @@
         method: PUT
         body_format: json
         body: "{{ lookup('file', playbook_dir + '/../../opensearch/templates/' + item + '.json') }}"
-        user: "{{ opensearch_user }}"
-        password: "{{ opensearch_password }}"
-        force_basic_auth: yes
+        user: "{{ opensearch_user | default('') }}"
+        password: "{{ opensearch_password | default('') }}"
+        force_basic_auth: "{{ (opensearch_user | default('')) | length > 0 }}"
         validate_certs: "{{ (opensearch_ssl_verify | default('false')) | bool }}"
-        ca_path: "{{ deploy_dir }}/certs/opensearch-ca.pem"
+        ca_path: "{{ (opensearch_ssl | default('false')) | bool | ternary(deploy_dir + '/certs/opensearch-ca.pem', omit) }}"
         status_code: [200, 201]
       loop:
         - fluent-audit
