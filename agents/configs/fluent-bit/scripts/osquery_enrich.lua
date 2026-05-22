@@ -598,6 +598,22 @@ function enrich_osquery(tag, timestamp, record)
         record["event.dataset"] = "osquery.bpf_socket_events"
         if cols["pid"]    then record["process.pid"] = tonumber(cols["pid"]) end
 
+        -- process.entity_id: epoch-based start_time через /proc/<pid>/stat,
+        -- та же формула что в auditd_enrich и osquery/processes →
+        -- cross-index join по entity_id корректен для живых процессов.
+        -- Отличается от bpf_processes (ntime). Для короткоживущих процессов
+        -- /proc/<pid>/stat может быть уже недоступен — entity_id не ставим.
+        local bpf_sock_pid = tonumber(cols["pid"])
+        if bpf_sock_pid and bpf_sock_pid > 0 then
+            local start_ts = common.resolve_start(bpf_sock_pid)
+            if start_ts then
+                local seed = (record["host.name"] or "")
+                          .. ":" .. tostring(bpf_sock_pid)
+                          .. ":" .. tostring(start_ts)
+                record["process.entity_id"] = common.short_id(seed)
+            end
+        end
+
         -- syscall (bind/connect/accept) переопределяет QUERY_META default
         local syscall = cols["syscall"] or cols["action"]
         if syscall and syscall ~= "" then
@@ -617,6 +633,16 @@ function enrich_osquery(tag, timestamp, record)
             local proto_name = PROTO[proto]
             if proto_name then record["network.transport"] = proto_name end
             record["network.iana_number"] = proto
+        else
+            -- protocol=0: приложение использовало SOCK_STREAM/SOCK_DGRAM
+            -- с protocol=0 (ядро выбирает автоматически). Best-effort:
+            -- AF_INET/AF_INET6 + remote_port>0 → предполагаем TCP (connect/accept).
+            -- Не применяем к bind (socket_bind может быть UDP).
+            local rport = tonumber(cols["remote_port"])
+            if (fam == "2" or fam == "10") and rport and rport > 0 then
+                record["network.transport"] = "tcp"
+                record["labels.transport_inferred"] = "true"
+            end
         end
 
         -- "0" из BPF — unbound/any адрес, не валидный IP для OpenSearch.

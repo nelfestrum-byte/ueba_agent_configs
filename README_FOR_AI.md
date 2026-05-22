@@ -588,6 +588,8 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 - `event.action: socket_<syscall>` → `socket_connect`, `socket_bind`, `socket_accept`
 - `event.dataset: osquery.bpf_socket_events`
 - ECS: `process.pid`, `network.type` (ipv4/ipv6 из family AF_INET=2/AF_INET6=10), `network.transport` (tcp/udp из protocol IANA), `source.ip`, `source.port`, `destination.ip`, `destination.port`
+- `process.entity_id` — epoch-based seed `FNV-1a(host.name:pid:start_time)`, где `start_time` берётся из `/proc/<pid>/stat`. **Совместим** с auditd и osquery/processes (тот же seed). Отличается от bpf_processes (там ntime). Отсутствует для короткоживущих процессов, чьи `/proc/<pid>/stat` уже недоступны на момент enrich.
+- `labels.transport_inferred: "true"` — `network.transport` выведен эвристически из `protocol=0 + remote_port>0` (приложение вызвало `socket(AF_INET, SOCK_STREAM, 0)` — ядро выбрало TCP, но osquery записал raw `0`). Поле позволяет фильтровать события, где transport не из данных. Применяется только к connect/accept (есть `remote_port`), не к bind.
 - `container.id`, `container.name`, `container.image.name`, `container.entity_id` — резолвятся аналогично bpf_processes через `/proc/<pid>/cgroup` + `container_cache`
 - **UEBA**: второй независимый источник сетевых соединений — кросс-верификация с auditd `connect`
 
@@ -614,8 +616,8 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | Реальный пользователь (до sudo) | `user.effective.id` | auditd (auid — login UID, сохраняется через sudo) |
 | Хост | `host.name` | все источники |
 | Сессия пользователя | `user.session.id` | auditd, osquery (processes/connections/files/logged_in_users) — **join корректен**: одинаковая формула FNV-1a(host.name:btime:ses); объединяет все события от логина до выхода |
-| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed (epoch seconds) |
-| Процесс BPF (изолировано) | `process.entity_id` | osquery bpf_processes — **НЕ совпадает** с auditd/processes (seed: ntime в monotonic ns, не epoch) |
+| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery (processes, bpf_socket_events) — **join корректен**: одинаковая формула, одинаковый seed (epoch seconds) |
+| Процесс BPF (изолировано) | `process.entity_id` | osquery bpf_processes — **НЕ совпадает** с auditd/processes (seed: ntime в monotonic ns, не epoch). `bpf_socket_events` использует epoch-based start_time и совместим с auditd. |
 | Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
 | Исходный IP (SSH) | `source.ip` | osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections, auditd connect/bind |
