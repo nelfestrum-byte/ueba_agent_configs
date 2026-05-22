@@ -147,6 +147,37 @@
 # Swap manipulation (LD_PRELOAD prep, persistence)
 -a always,exit -F arch=b64 -S swapon,swapoff -k swap_modify
 
+# ── Tier B: persistence, network/DNS, package mgmt (P1-01) ───────────────────
+-w /etc/environment       -p wa -k env_change
+-w /etc/selinux/          -p wa -k mac_policy_change
+-w /etc/apparmor/         -p wa -k mac_policy_change
+-w /etc/apparmor.d/       -p wa -k mac_policy_change
+-w /etc/profile.d/        -p wa -k shell_profile_change
+-w /etc/profile           -p wa -k shell_profile_change
+-w /etc/bashrc            -p wa -k shell_profile_change
+-w /etc/inittab           -p wa -k init_change
+-w /etc/init.d/           -p wa -k init_change
+-w /etc/rc.local          -p wa -k init_change
+-w /etc/fstab             -p wa -k fstab_change
+-w /etc/udev/rules.d/     -p wa -k udev_change
+-w /etc/apt/              -p wa -k pkg_mgmt_change
+-w /etc/dnf/              -p wa -k pkg_mgmt_change
+-w /etc/yum.repos.d/      -p wa -k pkg_mgmt_change
+-w /etc/nftables.conf     -p wa -k firewall_change
+-w /etc/iptables/         -p wa -k firewall_change
+-w /etc/issue             -p wa -k issue_change
+-w /etc/issue.net         -p wa -k issue_change
+-w /etc/sssd/             -p wa -k user_changes
+-w /etc/openldap/         -p wa -k user_changes
+-w /etc/krb5.conf         -p wa -k user_changes
+-w /etc/polkit-1/         -p wa -k pam_changes
+
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k hostname_dns_change
+-w /etc/hosts             -p wa -k hostname_dns_change
+-w /etc/resolv.conf       -p wa -k hostname_dns_change
+
+-a always,exit -F arch=b64 -S mknod,mknodat -F auid>=1000 -F auid!=unset -k specialfile_create
+
 # ── Иммутабельный режим (раскомментировать после стабилизации правил) ────────
 ## После -e 2 правила нельзя изменить до перезагрузки. Это рекомендуется в проде,
 ## но имеет смысл включать только когда правила выше точно устаканились.

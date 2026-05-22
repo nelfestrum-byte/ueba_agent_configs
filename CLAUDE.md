@@ -104,7 +104,7 @@ ueba-stand/
 | **Конфиги Logstash** | `logstash/configs/logstash.yml`, `pipelines.yml` | Настройки рантайма |
 | **Деплой Logstash** | `logstash/deploy/logstash-deploy.yml` | Ansible: docker pull + copy + up |
 | **Переменные Logstash** | `logstash/deploy/group_vars/all.yml` | opensearch_url, SSL, image, bind_addr |
-| **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch |
+| **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch; Tier A (P1-01): anti-forensics, persistence, container escape; Tier B: env/mac/pkg/firewall/dns — cherry-pick из Neo23x0/auditd |
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd + osquery pipelines |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id` |

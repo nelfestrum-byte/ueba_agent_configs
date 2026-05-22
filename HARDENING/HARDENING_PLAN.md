@@ -19,7 +19,7 @@
 | P0-02 | `user.session.id` — сквозной идентификатор сессии | ~2-3 часа | P0-01 (переиспользует `short_id()` и `btime`-кэш) |
 | ~~P0-03~~ | ~~Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`)~~ — **УДАЛЕНО** (дублирует auditd) | ~1 день | — |
 | **P0-04** | **Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm ✓ ВЫПОЛНЕНО 2026-05-22** | ~2-3 часа | учитывает P1-01 уточнения |
-| P1-01 | Gap-анализ audit.rules против Neo23x0 ruleset (Tier A + Tier B) | ~3-4 часа | — |
+| **P1-01** | **Gap-анализ audit.rules против Neo23x0 ruleset (Tier A + Tier B) ✓ ВЫПОЛНЕНО 2026-05-22** | ~3-4 часа | — |
 | P1-02 | ECS Index Templates для OpenSearch (3 шаблона) | ~4 часа | после P0-01, P0-02 |
 | P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | — |
 | P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-04, P1-01 |
@@ -312,7 +312,7 @@ end
 
 **Приоритет:** P1 (стабильность покрытия)
 **Стоимость:** ~3-4 часа (правила + enrich для новых syscall'ов + тест на шум на dev-стенде)
-**Статус:** анализ выполнен, имплементация не начата
+**Статус:** **выполнено 2026-05-22** — Tier A (12 правил) + Tier B (~14 правил + 2 syscall) добавлены в audit.rules; SYSCALLS таблица и категоризация в auditd_enrich.lua расширены.
 **Источник:** [Neo23x0/auditd](https://github.com/Neo23x0/auditd) — Florian Roth, MIT, де-факто референс по auditd для threat detection.
 
 ### Подход

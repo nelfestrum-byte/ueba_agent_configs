@@ -49,6 +49,8 @@ auditd перехватывает системные вызовы на уров�
 - **ptrace / process_vm_readv / process_vm_writev** — process injection (T1055; auid≥1000)
 - **memfd_create** — fileless execution через анонимный fd (T1620; auid≥1000)
 - **bpf** — загрузка eBPF-программы (rootkit/backdoor вектор; auid≥1000; whitelist osqueryd потребуется при включении P2-01)
+- **Tier A (P1-01): anti-forensics + persistence + container escape** — watch на `/var/log/audit/`, `/etc/ld.so.preload`, `/etc/ld.so.conf*`; syscalls: `reboot`, `acct`, `utimensat/utimes/futimesat` (timestomp), `unshare/setns/pivot_root` (container escape), `mount/umount2/move_mount/...` (mount-based escape), `kexec_file_load/kexec_load` (kernel hot-replace), `userfaultfd` (exploitation primitive), `socket a0=38` (AF_ALG crypto bypass), `swapon/swapoff`
+- **Tier B (P1-01): extended persistence + network config + package mgmt** — watch на env, MAC-политики (selinux/apparmor), shell-профили, init/rc.local, fstab, udev, apt/dnf/yum, firewall (nftables/iptables), /etc/ssh (только sshd_config), SSSD/LDAP/Kerberos, polkit, issue; syscalls: `sethostname/setdomainname`, `mknod/mknodat`
 
 ### 3.2 Обработка в fluent-bit
 
@@ -144,6 +146,14 @@ auditd перехватывает системные вызовы на уров�
 | `bpf` | Загрузка eBPF-программы; rootkit-индикатор |
 | `io_uring_setup` | Использование io_uring; редко на prod-серверах → flag |
 | `sudo` / `privilege_use` | Выполнение с повышенными правами |
+| `mount_action` (mount/move_mount/...) | Mount-based escape: монтирование поверх /etc или /proc — container escape сигнал |
+| `container_escape` (unshare/setns/pivot_root) | Namespace escape / pivot root: выход из контейнера или создание нового namespace |
+| `preload_inject` | Запись /etc/ld.so.preload — классическая LD_PRELOAD persistence |
+| `pkg_mgmt_change` | Изменение apt/dnf/yum репозиториев — supply-chain вектор |
+| `firewall_change` | Изменение nftables/iptables — попытка открыть/закрыть порты скрытно |
+| `timestomp` (utimensat/utimes/futimesat) | Подмена mtime/atime файлов — T1070.006 anti-forensics |
+| `kexec_hot_replace` | kexec_file_load/kexec_load — горячая замена ядра |
+| `audit_log_tamper` | Запись в /var/log/audit/ — попытка затереть audit-логи |
 
 ---
 
