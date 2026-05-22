@@ -15,7 +15,7 @@
 
 - **Базовые линии**: osquery diff позволяет строить baseline (типичные процессы, соединения, пользователи)
 - **Аномалии**: auditd execve + syscall-трассировка — основа для детектирования аномального поведения
-- **Идентичность**: user.id / user.name сквозные через все источники (auditd auid, osquery uid, system.auth)
+- **Идентичность**: user.id / user.name сквозные через все источники (auditd auid, osquery uid)
 - **Граф сущностей**: host.name + process.pid + user.name + destination.ip → граф для UEBA
 
 ---
@@ -23,11 +23,10 @@
 ## 2. Архитектура пайплайна (с точки зрения данных)
 
 ```
-Источник          Транспорт              Хранилище
-─────────────────────────────────────────────────────────────────
-auditd            fluent-bit TCP 5045    fluent-audit-YYYY.MM.dd
-osquery           fluent-bit TCP 5047    fluent-osquery-YYYY.MM.dd
-auth.log (sshd)   fluent-bit TCP 5048    system-auth-YYYY.MM.dd
+Источник   Транспорт              Хранилище
+────────────────────────────────────────────────────────────────
+auditd     fluent-bit TCP 5045    fluent-audit-YYYY.MM.dd
+osquery    fluent-bit TCP 5047    fluent-osquery-YYYY.MM.dd
 ```
 
 Все события проходят через **Logstash** (маршрутизация + type-cast) до записи в OpenSearch.
@@ -591,73 +590,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 - **ECS-extension:** `container.entity_id = host.name:container.name` — кастомное расширение ECS (аналог `process.entity_id`). Стабильный ключ сущности, переживающий рестарты контейнера. Задокументирован здесь как extension.
 - **UEBA**: появление нового контейнера вне baseline → потенциальное shadow deployment
 
----
-
-## 5. Источник: fluent-bit SSH auth (индекс `system-auth-*`)
-
-Читает `/var/log/auth.log` через `tail` input с парсером `syslog_sshd`.
-Нормализация выполняется **sshd_enrich.lua** — только sshd-строки; прочие
-(su, CRON, sudo через PAM) проходят с `event.action = "other"`.
-
-### 5.1 Что собирается
-
-- SSH successful login (password, publickey)
-- SSH failed login + invalid user
-- SSH session open / close
-- SSH disconnect preauth, connection closed
-- PAM authentication failures
-
-> **OpenSSH 9.x**: В OpenSSH 9.x sshd запускает отдельный процесс `sshd-session` для каждого соединения. Enrich-скрипт принимает оба значения поля `program`: `"sshd"` и `"sshd-session"` — оба нормализуются с `process.name = "sshd"`.
-
-### 5.2 Форматы строк и event.action
-
-| Шаблон строки auth.log | `event.action` | `event.outcome` | `event.type` |
-|---|---|---|---|
-| `Failed password for invalid user <u> from <ip> port <p>` | `ssh_login_failed` | `failure` | `start` |
-| `Failed password for <u> from <ip> port <p>` | `ssh_login_failed` | `failure` | `start` |
-| `Accepted password for <u> from <ip> port <p>` | `ssh_login` | `success` | `start` |
-| `Accepted publickey for <u> from <ip> port <p>` | `ssh_login` | `success` | `start` |
-| `session opened for user <u>` | `session_opened` | `success` | `start` |
-| `session closed for user <u>` | `session_closed` | `success` | `end` |
-| `Invalid user <u> from <ip> port <p>` | `invalid_user` | `failure` | `start` |
-| `Disconnected from authenticating user <u> <ip> port <p> [preauth]` | `ssh_disconnect_preauth` | `failure` | `end` |
-| `Connection closed by authenticating user <u> <ip> port <p>` | `ssh_connection_closed` | — | `end` |
-| `Connection closed by <ip> port <p>` | `ssh_connection_closed` | — | `end` |
-| `PAM N more authentication failure` | `pam_auth_failure` | `failure` | `info` |
-| прочие строки | `other` | — | `info` |
-
-### 5.3 Гарантированные ECS-поля
-
-| Поле | Тип | Условие | Описание |
-|------|-----|---------|---------|
-| `ecs.version` | keyword | всегда | `"8.11"` |
-| `event.kind` | keyword | всегда | `"event"` |
-| `event.dataset` | keyword | всегда | `"system.auth"` |
-| `event.module` | keyword | всегда | `"system"` |
-| `event.category` | keyword | всегда | `"authentication"` |
-| `event.action` | keyword | всегда | см. таблицу выше |
-| `event.type` | keyword | всегда | start / end / info |
-| `event.outcome` | keyword | если применимо | success / failure |
-| `process.name` | keyword | всегда | `"sshd"` (нормализовано, включая `sshd-session` OpenSSH 9.x) |
-| `process.pid` | integer | если pid в строке | PID sshd-процесса |
-| `user.name` | keyword | если извлечён | имя пользователя |
-| `related.user` | keyword[] | если user.name | `[user.name]` |
-| `source.ip` | ip | если извлечён | IP подключения |
-| `source.port` | integer | если извлечён | порт подключения |
-| `related.ip` | keyword[] | если source.ip | `[source.ip]` |
-| `host.name` | keyword | всегда | FQDN хоста (из `hostname -f`) |
-| `host.os.type` | keyword | всегда | `"linux"` |
-| `host.os.family` | keyword | всегда | `"linux"` |
-| `tags` | keyword[] | всегда | `["system-auth","fluent-bit","linux"]` |
-| `@timestamp` | date | всегда | время из строки auth.log (год = текущий) |
-
-### 5.4 Индекс
-
-`system-auth-YYYY.MM.dd` — динамический маппинг (index template не создан, P1-02 не начато). До создания шаблона: `source.ip` может замапиться как `text` вместо `ip` — CIDR-фильтры не будут работать.
-
----
-
-## 6. Сквозные идентификаторы для UEBA
+## 5. Сквозные идентификаторы для UEBA
 
 Для построения графа пользователь→хост→процесс→сеть используйте:
 
@@ -671,7 +604,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed (epoch seconds) |
 | Процесс BPF (изолировано) | `process.entity_id` | osquery bpf_processes — **НЕ совпадает** с auditd/processes (seed: ntime в monotonic ns, не epoch) |
 | Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
-| Исходный IP (SSH) | `source.ip` | system-auth (fluent-bit), osquery logged_in_users |
+| Исходный IP (SSH) | `source.ip` | osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections, auditd connect/bind |
 | Команда | `process.command_line` | auditd (execve), osquery processes |
 | Контейнер | `container.id` | osquery bpf_processes, bpf_sockets, docker_containers — Docker short ID (12 hex), резолвится из `/proc/<pid>/cgroup` |
@@ -686,7 +619,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 ---
 
-## 7. Что НЕ входит в текущий стенд
+## 6. Что НЕ входит в текущий стенд
 
 - MITRE ATT&CK аннотация событий (отключена в `auditd_enrich.lua` — теги предназначены для scoring, не для raw-событий)
 - GeoIP обогащение (не настроено в Logstash)
@@ -694,7 +627,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 ---
 
-## 8. Файлы, критичные для AI-агентов надпроекта
+## 7. Файлы, критичные для AI-агентов надпроекта
 
 | Файл | Зачем |
 |------|-------|
@@ -702,7 +635,6 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | `agents/configs/fluent-bit/scripts/proc_common.lua` | Общая библиотека (shared module): `short_id()` (FNV-1a hash), кэши `pid→start_time/name/cmdline`, `read_proc_start()`, `get_sessionid()`, `make_session_id()`, `to_iso()`. Импортируется всеми тремя enrich-скриптами — изменение меняет behavior во всех пайплайнах. |
 | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | Маппинг запросов → ECS категории/действия; table `QUERY_META` — истина о категоризации всех osquery событий |
 | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг; таблица `SYSCALLS` — истина о поддерживаемых syscall номерах |
-| `agents/configs/fluent-bit/scripts/sshd_enrich.lua` | ECS-нормализация auth.log sshd-строк → system-auth; таблица `PATTERNS` — полный список поддерживаемых форматов строк |
 | `logstash/configs/pipeline/ueba-main.conf` | Входящие порты, type-cast, индексы |
 | `agents/configs/auditd/audit.rules` | Что именно перехватывает auditd (фильтр событий) |
 | `opensearch/templates/fluent-audit.json` | Точные типы ECS-полей в auditd-индексе (`wildcard`, `ip`, `date`, `integer`) |
@@ -710,7 +642,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 ---
 
-## 9. OpenSearch маппинги — что важно для запросов
+## 8. OpenSearch маппинги — что важно для запросов
 
 При построении UEBA-запросов учитывать типы полей из шаблонов (`opensearch/templates/`):
 

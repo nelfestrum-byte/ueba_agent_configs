@@ -28,7 +28,7 @@
 | Сервис | Роль |
 |--------|------|
 | **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
-| **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*`<br>3) Читает /var/log/auth.log; sshd_enrich.lua → TCP 5048 → `system-auth-*` |
+| **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*` |
 | **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи.<br>**На docker-хостах** (группа `[docker_hosts]`, `osquery_bpf_events_enabled=true`, ядро ≥5.10): BPF backend → `bpf_process_events`, `bpf_socket_events` — container-aware видимость с нативным `container.id`; `docker_containers` diff для инвентаря контейнеров. |
 
 **auditbeat** не используется — конфликтует с auditd за audit netlink-сокет.
@@ -65,8 +65,7 @@ ueba-stand/
 │   │   │   └── scripts/
 │   │   │       ├── auditd_merge.lua     — объединение событий по serial number
 │   │   │       ├── auditd_enrich.lua    — обогащение в ECS + MITRE ATT&CK теги
-│   │   │       ├── osquery_enrich.lua   — ECS-обогащение osquery diff-событий
-│   │   │       └── sshd_enrich.lua      — ECS-нормализация auth.log sshd-строк
+│   │   │       └── osquery_enrich.lua   — ECS-обогащение osquery diff-событий
 │   │   └── osquery/osquery.conf         — diff-запросы (без count/snapshot метрик)
 │   └── deploy/
 │       ├── agents-deploy.yml            — Ansible плейбук (auditd + fluent-bit + osquery)
@@ -85,14 +84,12 @@ ueba-stand/
 │   ├── opensearch/opensearch.yml
 │   └── scripts/                         — семплы событий для ручной отправки
 │       ├── send-auditd.sh
-│       ├── send-sshd.sh
 │       └── send-osquery.sh
 │
 ├── opensearch/
 │   └── templates/
 │       ├── fluent-audit.json            — шаблон индекса fluent-audit-* (ECS 8.11)
 │       ├── fluent-osquery.json          — шаблон индекса fluent-osquery-* + osquery.* namespace
-│       ├── filebeat-auth.json           — шаблон индекса filebeat-* (временный, приоритет 50)
 │       └── README.md                   — инструкция по применению (curl + PowerShell)
 │
 ├── README.md
@@ -103,16 +100,15 @@ ueba-stand/
 
 | Тема | Файлы | Назначение |
 |------|-------|-----------|
-| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats relay 5044 + fluent-bit TCP 5045/5047/5048 |
+| **Пайплайн** | `logstash/configs/pipeline/ueba-main.conf` | beats relay 5044 + fluent-bit TCP 5045/5047 |
 | **Конфиги Logstash** | `logstash/configs/logstash.yml`, `pipelines.yml` | Настройки рантайма |
 | **Деплой Logstash** | `logstash/deploy/logstash-deploy.yml` | Ansible: docker pull + copy + up |
 | **Переменные Logstash** | `logstash/deploy/group_vars/all.yml` | opensearch_url, SSL, image, bind_addr |
 | **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch |
-| **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd + osquery + system-auth pipelines |
+| **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd + osquery pipelines |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id` |
 | **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd |
-| **Lua sshd enrich** | `agents/configs/fluent-bit/scripts/sshd_enrich.lua` | ECS-нормализация auth.log sshd-строк → system.auth dataset |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf` | diff-запросы: процессы, сети, пользователи |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb |
@@ -125,7 +121,6 @@ ueba-stand/
 |--------|---------|
 | `fluent-audit-YYYY.MM.dd` | fluent-bit: auditd ECS-события (execve, sudo, auth, network, file) — TCP 5045 |
 | `fluent-osquery-YYYY.MM.dd` | fluent-bit: osquery diff-события ECS + osquery.* namespace — TCP 5047 |
-| `system-auth-YYYY.MM.dd` | fluent-bit: SSH auth.log sshd ECS-события — TCP 5048 |
 
 ## Инструкции по сокращению токенов
 
@@ -199,7 +194,7 @@ docker compose logs -f logstash
 docker compose restart logstash
 
 # Проверка индексов OpenSearch
-curl -s 'http://localhost:9200/_cat/indices?v&index=fluent-audit-*,fluent-osquery-*,system-auth-*' | sort
+curl -s 'http://localhost:9200/_cat/indices?v&index=fluent-audit-*,fluent-osquery-*' | sort
 
 # Деплой Logstash в прод
 cd logstash/deploy && ansible-playbook logstash-deploy.yml --ask-vault-pass

@@ -13,11 +13,6 @@
 #                в ECS + osquery.* namespace → Logstash TCP 5047
 #                → OpenSearch индекс fluent-osquery-YYYY.MM.dd
 #
-# Стек сбора SSH auth:
-#   fluent-bit — читает /var/log/auth.log, нормализует sshd-строки через
-#                sshd_enrich.lua → Logstash TCP 5048
-#                → OpenSearch индекс system-auth-YYYY.MM.dd
-#
 # Использование:
 #   cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 #
@@ -224,15 +219,6 @@
         mode: "0644"
       notify: restart fluent-bit
 
-    - name: Развернуть Lua-скрипт sshd_enrich.lua
-      ansible.builtin.copy:
-        src: ../configs/fluent-bit/scripts/sshd_enrich.lua
-        dest: /etc/fluent-bit/scripts/sshd_enrich.lua
-        owner: root
-        group: root
-        mode: "0644"
-      notify: restart fluent-bit
-
     - name: Развернуть общие Lua-утилиты proc_common.lua
       ansible.builtin.copy:
         src: ../configs/fluent-bit/scripts/proc_common.lua
@@ -255,13 +241,6 @@
       ansible.builtin.user:
         name: fluent-bit
         groups: adm
-        append: true
-      notify: restart fluent-bit
-
-    - name: Добавить fluent-bit в группу systemd-journal (чтение journald для sshd)
-      ansible.builtin.user:
-        name: fluent-bit
-        groups: systemd-journal
         append: true
       notify: restart fluent-bit
 
