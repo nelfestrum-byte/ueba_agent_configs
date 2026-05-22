@@ -22,7 +22,9 @@ end
 function M.short_id(s)
     local hi = fnv32(s, FNV32_OFFSET)
     local lo = fnv32(s, FNV32_OFFSET_ALT)
-    return string.format("%08x%08x", hi, lo)
+    -- bit.band() returns signed int32; format("%08x", negative) gives 16 chars
+    -- in Lua 5.3+. Mod 2^32 forces unsigned [0, 2^32-1] → exactly 8 hex chars.
+    return string.format("%08x%08x", hi % 0x100000000, lo % 0x100000000)
 end
 
 -- ── Per-instance state (each Lua VM gets its own copy) ──────────────────────
