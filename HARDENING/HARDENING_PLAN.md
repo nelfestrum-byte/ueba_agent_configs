@@ -18,7 +18,7 @@
 | P0-01 | `process.entity_id` и `process.parent.entity_id` в Lua-enrich | ~1 час | — |
 | P0-02 | `user.session.id` — сквозной идентификатор сессии | ~2-3 часа | P0-01 (переиспользует `short_id()` и `btime`-кэш) |
 | P0-03 | Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`) | ~1 день | — |
-| P0-04 | Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm | ~2-3 часа | учитывает P1-01 уточнения |
+| **P0-04** | **Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm ✓ ВЫПОЛНЕНО 2026-05-22** | ~2-3 часа | учитывает P1-01 уточнения |
 | P1-01 | Gap-анализ audit.rules против Neo23x0 ruleset (Tier A + Tier B) | ~3-4 часа | — |
 | P1-02 | ECS Index Templates для OpenSearch (4 шаблона) | ~4 часа | после P0-01, P0-02, P0-03 |
 | P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | после P0-03 |
@@ -231,7 +231,7 @@ input { tcp { port => 5048 codec => json_lines tags => ["system-auth","fluent-bi
 
 **Приоритет:** P0 (закрытие современных bypass-векторов)
 **Стоимость:** ~2-3 часа (правила + дополнение SYSCALLS таблицы в enrich + триггер на dev)
-**Статус:** не начато
+**Статус:** выполнено 2026-05-22
 **Зависимости:** учитывает корректировки из P1-01 (брать только `io_uring_setup`, обе формы `process_vm_*`).
 
 ### Зачем (P0-04)

@@ -46,6 +46,10 @@ auditd перехватывает системные вызовы на уров�
 - **openat / open / creat** — открытие файлов в критичных директориях
 - **unlink / unlinkat** — удаление файлов
 - **SSH auth events** — USER_LOGIN, USER_LOGOUT, LOGIN
+- **io_uring_setup** — инициализация io_uring ring (RingReaper-class bypass; auid≥1000)
+- **ptrace / process_vm_readv / process_vm_writev** — process injection (T1055; auid≥1000)
+- **memfd_create** — fileless execution через анонимный fd (T1620; auid≥1000)
+- **bpf** — загрузка eBPF-программы (rootkit/backdoor вектор; auid≥1000; whitelist osqueryd потребуется при включении P2-01)
 
 ### 3.2 Обработка в fluent-bit
 
@@ -111,6 +115,11 @@ auditd перехватывает системные вызовы на уров�
 | `setuid` | Privilege escalation; редко в baseline → высокий скор |
 | `openat` | Доступ к чувствительным файлам (/etc/passwd, ~/.ssh/) |
 | `unlink` | Удаление файлов; anti-forensics паттерн |
+| `memfd_create` | Fileless execution; в baseline почти нет → высокий скор |
+| `ptrace` | Process injection; редко вне debugger'ов → подозрение |
+| `process_vm_writev` | Memory injection; критичный сигнал |
+| `bpf` | Загрузка eBPF-программы; rootkit-индикатор |
+| `io_uring_setup` | Использование io_uring; редко на prod-серверах → flag |
 | `sudo` / `privilege_use` | Выполнение с повышенными правами |
 
 ---

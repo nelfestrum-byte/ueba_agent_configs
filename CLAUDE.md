@@ -268,6 +268,12 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 **shell_history и приватность:** `shell_history` читает `~/.bash_history` / `~/.zsh_history` всех пользователей. Маскирование `--password=`, `--token=`, `--api-key=` в Lua **не применяется** (отключено по решению проекта) — raw command lines попадают в `fluent-osquery-*`. При изменении политики — добавить `gsub`-паттерны в `osquery_enrich.lua` блок `shell_history`.
 
+### P0-04 — auditd bpf-правило и osquery BPF backend (P2-01)
+
+Правило `-a always,exit -F arch=b64 -S bpf -F auid>=1000 -F auid!=unset -k ebpf_use` добавлено в P0-04 **без** whitelist'а osqueryd.
+
+При включении P2-01 (osquery BPF backend, группа `[docker_hosts]`) osqueryd начнёт загружать BPF-программы → будет триггерить это правило → feedback loop. **До включения P2-01 необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`**. Это отдельный коммит, не смешивать с P2-01.
+
 ---
 
 ## Что НЕ читать
@@ -278,5 +284,5 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ---
 
-**Последнее обновление:** 2026-05-21
+**Последнее обновление:** 2026-05-22
 **Версия проекта:** auditd+fluent-bit+osquery (pure fluent-bit стек) → Logstash → OpenSearch

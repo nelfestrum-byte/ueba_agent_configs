@@ -23,6 +23,10 @@ local SYSCALLS = {
     ["257"]="openat",    ["258"]="mkdirat",   ["263"]="unlinkat",
     ["265"]="linkat",    ["266"]="symlinkat", ["288"]="accept4",
     ["316"]="renameat2", ["322"]="execveat",
+    -- P0-04: modern bypass vectors
+    ["101"]="ptrace",          ["310"]="process_vm_readv",
+    ["311"]="process_vm_writev",["319"]="memfd_create",
+    ["321"]="bpf",             ["425"]="io_uring_setup",
 }
 
 -- ── ECS event.category по типу auditd-события ──
@@ -249,6 +253,21 @@ function enrich_ecs(tag, timestamp, record)
                sc_name == "setresuid" then
             record["event.type"]     = "change"
             record["event.category"] = "iam"
+        -- P0-04: modern bypass vectors
+        elseif sc_name == "ptrace"
+            or sc_name == "process_vm_readv"
+            or sc_name == "process_vm_writev" then
+            record["event.type"]     = "change"
+            record["event.category"] = "process"
+        elseif sc_name == "memfd_create" then
+            record["event.type"]     = "creation"
+            record["event.category"] = "process"
+        elseif sc_name == "bpf" then
+            record["event.type"]     = "info"
+            record["event.category"] = "process"
+        elseif sc_name == "io_uring_setup" then
+            record["event.type"]     = "info"
+            record["event.category"] = "process"
         end
 
         --[[

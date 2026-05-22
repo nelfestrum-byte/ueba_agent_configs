@@ -77,6 +77,22 @@
 -a always,exit -F arch=b64 -S execve -F dir=/dev/shm -k suspicious_exec
 -a always,exit -F arch=b64 -S execve -F dir=/var/tmp -k suspicious_exec
 
+# ── Современные bypass-векторы (P0-04) ───────────────────────────────────────
+# io_uring — RingReaper-class bypasses; ловим только setup (не операции внутри)
+-a always,exit -F arch=b64 -S io_uring_setup -F auid>=1000 -F auid!=unset -k io_uring
+
+# Process injection: ptrace + чтение/запись чужой памяти
+-a always,exit -F arch=b64 -S ptrace -F auid>=1000 -F auid!=unset -k process_injection
+-a always,exit -F arch=b64 -S process_vm_readv,process_vm_writev -F auid>=1000 -F auid!=unset -k process_injection
+
+# Fileless execution через memfd_create (T1620)
+-a always,exit -F arch=b64 -S memfd_create -F auid>=1000 -F auid!=unset -k fileless_exec
+
+# Любая загрузка eBPF-программы. ВНИМАНИЕ: при включении P2-01 (osquery BPF backend)
+# osqueryd создаст feedback loop — добавить -F exe!=/usr/bin/osqueryd когда P2-01 будет
+# в работе. Сейчас фильтр не нужен.
+-a always,exit -F arch=b64 -S bpf -F auid>=1000 -F auid!=unset -k ebpf_use
+
 # ── Повышение привилегий ─────────────────────────────────────────────────────
 -a always,exit -F arch=b64 -S setuid    -k privilege_change
 -a always,exit -F arch=b64 -S setgid    -k privilege_change
