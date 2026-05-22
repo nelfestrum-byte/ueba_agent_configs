@@ -98,11 +98,21 @@
       register: cfg_patterns
 
     - name: Применить index templates в OpenSearch
+      vars:
+        _tpl_raw: "{{ lookup('file', playbook_dir + '/../../opensearch/templates/' + item + '.json') }}"
+        # opensearch_compat_mode: true — заменяет wildcard/constant_keyword на keyword.
+        # Нужно для OS-сборок, где эти типы не зарегистрированы (напр. staging).
+        _tpl_body: >-
+          {{ (_tpl_raw
+              | regex_replace('"type":\s*"constant_keyword",\s*"value":\s*"[^"]+"', '"type": "keyword"')
+              | replace('"type": "wildcard"', '"type": "keyword"'))
+             if (opensearch_compat_mode | default(false) | bool)
+             else _tpl_raw }}
       ansible.builtin.uri:
         url: "{{ opensearch_url }}/_index_template/{{ item }}"
         method: PUT
         body_format: json
-        body: "{{ lookup('file', playbook_dir + '/../../opensearch/templates/' + item + '.json') }}"
+        body: "{{ _tpl_body }}"
         user: "{{ opensearch_user | default('') }}"
         password: "{{ opensearch_password | default('') }}"
         force_basic_auth: "{{ (opensearch_user | default('')) | length > 0 }}"

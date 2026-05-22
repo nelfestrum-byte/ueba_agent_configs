@@ -31,6 +31,11 @@ opensearch_ssl_verify: "true"
 # CA-сертификат для верификации TLS
 opensearch_ca_cert_src: "files/opensearch-ca.pem"
 
+# Режим совместимости маппинга: заменяет wildcard/constant_keyword → keyword при применении шаблонов.
+# Нужно для OpenSearch-сборок, где эти типы не поддерживаются (нестандартный staging).
+# В проде с официальным opensearch:2.x — оставить false.
+# opensearch_compat_mode: false
+
 # Адрес, на который Logstash биндит порты приёма событий.
 # В проде — указать внутренний интерфейс, чтобы порты не были публичными.
 # logstash_bind_addr: 10.0.0.5
