@@ -61,9 +61,17 @@ auditd перехватывает системные вызовы на уров�
    - syscall number → имя (`SYSCALLS` таблица, x86_64)
    - `event.category`, `event.type`, `event.action` по типу события
    - `process.*` из полей pid/ppid/comm/exe/proctitle/_execve_args; `process.parent.name` и `process.parent.command_line` из кэшей `pid→name`/`pid→cmdline` или `/proc/<ppid>/comm` и `/proc/<ppid>/cmdline`
-   - `user.id` из uid, `user.effective.id` из auid (реальный пользователь до sudo)
+   - `user.id` из uid, `user.effective.id` из auid (login UID — реальный пользователь до sudo)
+   - `source.*` / `destination.*` из SOCKADDR-записей auditd (decode_saddr: AF_INET / AF_INET6)
    - `file.*` из PATH-записей auditd
    - `event.outcome`: success / failure из syscall_success
+
+3. **proc_common.lua** — общий модуль (импортируется всеми тремя enrich-скриптами):
+   - `short_id()` — FNV-1a 64-bit → 16 hex символов (для entity_id и session.id)
+   - `/proc/<pid>/stat` чтение и кэш `pid → start_time` (epoch seconds)
+   - `/proc/<pid>/comm`, `/proc/<pid>/cmdline` чтение и кэши имён/cmdline
+   - `/proc/<pid>/sessionid` чтение для `user.session.id`
+   - `to_iso(ts)` — конвертирует epoch seconds → ISO 8601 строку (тип `date` в OpenSearch)
 
 ### 3.3 Гарантированные ECS-поля
 
@@ -79,27 +87,41 @@ auditd перехватывает системные вызовы на уров�
 | `event.outcome` | keyword | при наличии | success / failure |
 | `host.name` | keyword | всегда | FQDN агентского хоста |
 | `host.os.type` | keyword | всегда | `"linux"` |
+| `host.os.family` | keyword | всегда | `"linux"` |
 | `process.pid` | integer | при syscall | PID процесса |
 | `process.parent.pid` | integer | при syscall | PPID |
-| `process.parent.name` | keyword | если ppid жив или в кэше | Имя родительского процесса (comm, max 15 символов). Берётся из кэша `pid→name` (заполняется при обработке событий родителя), при cache miss — из `/proc/<ppid>/comm`. Отсутствует если родитель завершился до enrich и не попал в кэш. |
-| `process.parent.command_line` | keyword | если ppid жив или в кэше | Командная строка родительского процесса. Берётся из кэша `pid→cmdline` (заполняется из `process.command_line` текущего процесса после обработки execve-аргументов), при cache miss — из `/proc/<ppid>/cmdline` (null-байты заменены пробелами). Отсутствует если родитель завершился до enrich и не попал в кэш. |
+| `process.parent.name` | keyword | если ppid жив или в кэше | Имя родительского процесса (comm, max 15 символов). Из кэша `pid→name`, при miss — из `/proc/<ppid>/comm`. Отсутствует если родитель завершился до enrich и не попал в кэш. |
+| `process.parent.command_line` | keyword | если ppid жив или в кэше | Командная строка родителя. Из кэша `pid→cmdline`, при miss — из `/proc/<ppid>/cmdline`. |
 | `process.entity_id` | keyword | если pid > 0 | Стабильный ID процесса: FNV-1a hash(host.name:pid:start_time), 16 hex. Одинаков для всех событий одного процесса; переключается при PID reuse. Источник: `/proc/<pid>/stat` field 22 + btime. |
 | `process.parent.entity_id` | keyword | если ppid резолвирован | ID родительского процесса. Может отсутствовать сразу после рестарта fluent-bit пока родитель не появится в `/proc` или кэше. |
-| `process.start` | long | если pid > 0 | Время старта процесса, epoch seconds (btime + floor(starttime_ticks / CLK_TCK)). Совпадает с `osquery.processes.start_time`. |
+| `process.start` | date | если pid > 0 | Время старта процесса, ISO 8601. Вычисляется как btime + floor(starttime_ticks / CLK_TCK), конвертируется в ISO строку через `to_iso()`. Совпадает по значению с `osquery.processes.start_time`. |
+| `process.parent.start` | date | если ppid резолвирован | Время старта родительского процесса, ISO 8601. Из кэша или `/proc/<ppid>/stat`. |
 | `process.name` | keyword | при syscall | имя процесса (comm) |
 | `process.executable` | keyword | при syscall | полный путь (exe) |
-| `process.command_line` | keyword | при execve | командная строка |
+| `process.title` | keyword | при syscall | Сырой proctitle (полная командная строка из `/proc/<pid>/comm`-поля auditd PROCTITLE). |
+| `process.command_line` | keyword | при execve или proctitle | Нормализованная командная строка: preferably из EXECVE-аргументов, иначе proctitle. |
 | `process.args` | keyword[] | при execve | аргументы (массив) |
 | `process.args_count` | integer | при execve | количество аргументов |
 | `process.working_directory` | keyword | при CWD | рабочая директория |
 | `labels.entity_id_source` | keyword | при fallback | `event_timestamp_fallback` — процесс исчез из `/proc` до enrich (exit-событие короткоживущего); entity_id такого события **не совпадёт** с osquery. |
-| `user.id` | keyword | всегда | UID процесса |
+| `user.id` | keyword | всегда | UID процесса (uid из auditd) |
 | `user.name` | keyword | если известен | имя пользователя (uid_name или user_acct) |
-| `user.effective.id` | keyword | если auid ≠ -1 | audit UID (реальный до sudo) |
-| `user.effective.name` | keyword | если известен | имя audit-пользователя |
+| `user.effective.id` | keyword | если auid ≠ -1 | Login UID (auid) — реальный пользователь до sudo. При `sudo cmd` process uid=0, auid = залогинившийся. |
+| `user.effective.name` | keyword | если известен | имя login-пользователя |
+| `source.ip` | ip | при accept/accept4 | IP подключившегося клиента (из SOCKADDR-записи auditd, AF_INET/AF_INET6). |
+| `source.port` | integer | при accept/accept4 | Порт подключившегося клиента. |
+| `destination.ip` | ip | при connect/bind | IP назначения или адрес привязки. |
+| `destination.port` | integer | при connect/bind | Порт назначения или bind-порт. |
+| `network.type` | keyword | при сетевых syscall | `"ipv4"` / `"ipv6"` — определяется из SOCKADDR family (AF_INET=2, AF_INET6=10). |
 | `file.path` | keyword | при PATH | полный путь файла |
 | `file.name` | keyword | при PATH | имя файла |
+| `file.extension` | keyword | при PATH | Расширение файла (из имени, после последней точки). |
 | `file.mode` | keyword | при PATH | права (rwxr-xr-x) |
+| `file.inode` | keyword | при PATH | inode файла |
+| `file.device` | keyword | при PATH | номер устройства |
+| `file.uid` | keyword | при PATH | UID владельца файла (ouid из auditd) |
+| `file.gid` | keyword | при PATH | GID владельца файла (ogid из auditd) |
+| `auditd.paths` | keyword[] | при > 1 PATH записи | Список всех путей из PATH-записей события (например, rename: source + destination). |
 | `auditd.data.syscall` | keyword | при SYSCALL | имя syscall |
 | `auditd.session` | integer | если ses > 0 | номер сессии auditd |
 | `user.session.id` | keyword | если ses > 0 и ses ≠ 0xFFFFFFFF | Стабильный ID сессии: FNV-1a hash(host.name:btime:ses), 16 hex. Одинаков для всех событий одной пользовательской сессии (auditd + osquery). Переключается при новом логине. |
@@ -111,12 +133,14 @@ auditd перехватывает системные вызовы на уров�
 | action | Сценарий UEBA |
 |--------|--------------|
 | `execve` | Базовая линия процессов; аномальный execve → подозрение |
+| `execveat` | Запуск процесса через fd (memfd + execveat = fileless без memfd_create отдельно) |
 | `connect` | Граф сетевых соединений; новый destination → скоринг |
 | `setuid` | Privilege escalation; редко в baseline → высокий скор |
 | `openat` | Доступ к чувствительным файлам (/etc/passwd, ~/.ssh/) |
 | `unlink` | Удаление файлов; anti-forensics паттерн |
 | `memfd_create` | Fileless execution; в baseline почти нет → высокий скор |
 | `ptrace` | Process injection; редко вне debugger'ов → подозрение |
+| `process_vm_readv` | Чтение чужой памяти; дамп credentials из памяти процесса |
 | `process_vm_writev` | Memory injection; критичный сигнал |
 | `bpf` | Загрузка eBPF-программы; rootkit-индикатор |
 | `io_uring_setup` | Использование io_uring; редко на prod-серверах → flag |
@@ -140,6 +164,7 @@ osquery работает в **differential mode**: каждые N секунд �
 - Маппирует `name` запроса на `event.category` / `event.action` / `event.type`
 - Копирует все `columns.*` → `osquery.<column>` (flat namespace)
 - Добавляет ECS `process.*`, `user.*`, `network.*`, `file.*` для релевантных запросов
+- Импортирует `proc_common.lua` для entity_id, session.id и кэшей
 
 ### 4.3 Запросы osquery и их ECS-маппинг
 
@@ -170,7 +195,7 @@ LEFT JOIN users u ON p.uid = u.uid
 ```
 
 - `action: added` → `event.action: port_listening` → новый прослушивающий порт
-- ECS: `destination.port`, `destination.ip`, `network.transport`, `process.pid`, `process.name`, `process.entity_id`, `user.name`, `user.id`
+- ECS: `destination.port`, `destination.ip`, `network.transport`, `network.iana_number`, `process.pid`, `process.name`, `process.entity_id`, `user.name`, `user.id`
 - **UEBA**: появление нового порта у хоста — потенциальный backdoor / lateral movement; `user.name` позволяет связать порт с конкретным пользователем
 
 #### `process_connections` (интервал: 30 сек)
@@ -184,7 +209,7 @@ WHERE pos.remote_address NOT IN ('0.0.0.0', '::', '127.0.0.1', '::1')
 ```
 
 - `action: added` → `event.action: network_connection`
-- ECS: `source.ip`, `source.port`, `destination.ip`, `destination.port`, `network.transport`, `process.*`, `user.name`
+- ECS: `source.ip`, `source.port`, `destination.ip`, `destination.port`, `network.transport`, `network.iana_number`, `process.*`, `user.name`
 - **UEBA**: граф process→IP; новый destination для процесса → аномалия
 
 #### `logged_in_users` (интервал: 30 сек)
@@ -221,6 +246,7 @@ SSH authorized_keys всех пользователей.
 Системные сервисы (systemd).
 
 - `action: added/removed` → `event.action: service_modified`
+- `event.category: configuration`
 - **UEBA**: новый сервис → persistence механизм
 
 #### `crontabs` (интервал: 60 сек)
@@ -327,6 +353,7 @@ SELECT uid, username, command, history_file FROM shell_history;
 
 - `removed: false` — только `action: added` (новые строки истории)
 - `event.action: shell_command`, `event.category: process`, `event.type: info`
+- `event.dataset: osquery.shell_history`
 - ECS: `process.command_line` (command), `file.path` (history_file), `user.name`, `user.id`
 - **UEBA**: последовательности команд — основа скоринга по поведению CLI; отклонения от baseline → сигнал
 
@@ -351,6 +378,7 @@ WHERE pe.key IN ('LD_PRELOAD','LD_AUDIT','LD_LIBRARY_PATH') AND pe.value != '';
 ```
 
 - `event.action: preload_env_set`, `event.category: process`
+- `event.dataset: osquery.process_envs`
 - ECS: `process.pid`, `process.name`, `process.executable`, `process.command_line`, `process.env.key`, `process.env.value`
 - **УЯЗВИМОСТЬ**: без WHERE-фильтра → десятки тысяч строк/ч. Фильтр обязателен.
 - **UEBA**: ненулевой LD_PRELOAD у нестандартного бинаря → preload injection
@@ -363,6 +391,7 @@ SELECT name, version, path FROM python_packages;  -- аналогично npm_pa
 
 - `action: added` → `event.action: package_installed`, `event.type: installation`
 - `action: removed` → `event.action: package_removed`, `event.type: deletion`
+- `event.category: package`
 - ECS: `package.name`, `package.version`, `package.path`
 - `event.dataset`: `osquery.python_packages` / `osquery.npm_packages` / `osquery.pip_packages`
 - **UEBA**: supply-chain — новый пакет вне change management → скоринг; typosquatting-детект по имени
@@ -374,6 +403,7 @@ SELECT name, version, arch FROM deb_packages;
 ```
 
 - `event.action: package_installed / package_removed`, `event.category: package`
+- `event.dataset: osquery.deb_packages`
 - ECS: `package.name`, `package.version`, `package.architecture`
 - **UEBA**: неавторизованная установка deb-пакета → риск persistence
 
@@ -385,6 +415,7 @@ SELECT * FROM kernel_keys;
 
 - Колонки osquery: `serial`, `type`, `description`, `uid`, `gid`
 - `event.action: kernel_key_added / kernel_key_removed`, `event.category: iam`
+- `event.dataset: osquery.kernel_keys`
 - ECS: `user.name` (generic extractor), `user.id`
 - **UEBA**: нестандартный ключ в keyring → Kerberos-атака / credential caching
 
@@ -395,6 +426,7 @@ SELECT * FROM sudoers;
 ```
 
 - `event.action: sudoers_modified`, `event.category: iam`, `event.type: change`
+- `event.dataset: osquery.sudoers`
 - **Замечание**: существующий запрос `sudoers` (120 сек) продолжает работать. `sudoers_diff` — более редкий diff с `removed: false` отключённым.
 - **UEBA**: изменение sudoers → privilege escalation подготовка
 
@@ -405,6 +437,7 @@ SELECT * FROM acpi_tables;
 ```
 
 - `event.action: acpi_table_added / acpi_table_removed`, `event.category: host`, `event.type: change`
+- `event.dataset: osquery.acpi_tables`
 - **UEBA**: низкочастотный детект firmware tamper; изменение ACPI-таблицы → буткит-индикатор
 
 #### `suspicious_mmap` (интервал: 300 сек, профиль: both)
@@ -420,6 +453,7 @@ WHERE pmm.path != ''
 ```
 
 - `event.action: non_standard_mmap`, `event.category: process`, `event.type: info`
+- `event.dataset: osquery.process_memory_map`
 - ECS: `process.pid`, `process.name`, `file.path` (pmm.path)
 - **UEBA**: не-стандартный .so в адресном пространстве → инъекция / reflective loading
 
@@ -430,6 +464,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN chrome_extensi
 ```
 
 - `event.action: extension_installed / extension_removed`, `event.category: configuration`
+- `event.dataset: osquery.chrome_extensions`
 - ECS: `package.name`, `package.version`, `package.identifier`, `user.id`
 - **UEBA**: новое расширение без IT-авторизации → информационный хищник / infostealer
 
@@ -440,6 +475,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 ```
 
 - `event.action: addon_installed / addon_removed`, `event.category: configuration`
+- `event.dataset: osquery.firefox_addons`
 - ECS: `package.name`, `package.version`, `package.identifier`, `user.id`
 - **UEBA**: аналогично chrome_extensions_diff
 
@@ -451,26 +487,55 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 |------|---------|
 | `ecs.version` | `"8.11"` |
 | `event.kind` | `"event"` |
-| `event.dataset` | `"osquery"` |
+| `event.dataset` | `"osquery"` для базовых запросов; специфичный для P2-02 и BPF — см. таблицу event.dataset ниже |
 | `event.module` | `"osquery"` |
-| `event.category` | process / network / iam / configuration / file / host / authentication |
+| `event.category` | process / network / iam / configuration / file / host / authentication / **package** |
 | `event.action` | специфично для запроса (см. таблицы выше) |
-| `event.type` | start / end / change / creation / deletion / access / info |
-| `host.name` | hostname хоста |
+| `event.type` | start / end / change / creation / deletion / access / info / installation |
+| `host.name` | hostname хоста (из `hostname -f`, FQDN) |
 | `host.os.type` | `"linux"` |
-| `process.pid` | PID (для запросов processes, process_connections, process_open_files, listening_ports) |
-| `process.entity_id` | Стабильный ID процесса, 16 hex. **Совпадает** с `process.entity_id` в auditd для того же процесса — одинаковая формула FNV-1a(host.name:pid:start_time). Источник start_time: `processes.start_time` (epoch seconds из osquery) или `/proc/<pid>/stat` на cache miss. |
+| `host.os.family` | `"linux"` |
+| `process.pid` | PID (для запросов processes, process_connections, process_open_files, listening_ports, preload_envs, suspicious_mmap) |
+| `process.entity_id` | Стабильный ID процесса, 16 hex. **Совпадает** с `process.entity_id` в auditd для того же процесса — одинаковая формула FNV-1a(host.name:pid:start_time). Источник start_time: `processes.start_time` (epoch seconds из osquery) или `/proc/<pid>/stat` на cache miss. Только для процессных запросов с PID. |
 | `process.parent.entity_id` | ID родительского процесса; отсутствует если родитель не резолвирован. |
-| `process.start` | Старт процесса, epoch seconds. Для таблицы `processes` = `cols.start_time`. Для остальных — из кэша или `/proc`. |
-| `process.parent.start` | Старт родительского процесса, epoch seconds. |
-| `user.session.id` | Стабильный ID сессии: FNV-1a hash(host.name:btime:ses), 16 hex. Читается из `/proc/<pid>/sessionid`. Отсутствует если процесс завершился до enrich. **Совпадает** с `user.session.id` в auditd для той же сессии. |
+| `process.start` | Старт процесса, ISO 8601 строка (через `to_iso()`). Для таблицы `processes` = `to_iso(cols.start_time)`. Для остальных — из кэша или `/proc`. Только для запросов с PID. |
+| `process.parent.start` | Старт родительского процесса, ISO 8601. Только для запросов с parent PID. |
+| `process.exit_code` | Exit code процесса. Только для `bpf_processes` (из `cols.exit_code`). |
+| `user.session.id` | Стабильный ID сессии: FNV-1a hash(host.name:btime:ses), 16 hex. Читается из `/proc/<pid>/sessionid`. Присутствует для запросов: **processes**, **process_connections**, **process_open_files**, **listening_ports**, **logged_in_users** (где доступен PID). Отсутствует для остальных (users, ssh_authorized_keys, crontabs и др.). **Совпадает** с `user.session.id` в auditd для той же сессии. |
 | `user.name` | Имя пользователя (для запросов: processes, process_connections, process_open_files, logged_in_users, users, ssh_authorized_keys, user_groups, startup_items, suid_bins, listening_ports, crontabs) |
 | `user.id` | UID пользователя (для тех же запросов, где доступен uid) |
+| `user.group.id` | GID процесса. Только для `bpf_processes` (из `cols.gid`). |
+| `user.terminal` | Имя tty/pts. Только для `last_logins` (из `cols.tty`). |
+| `network.transport` | tcp / udp / icmp (из IANA protocol number). Для process_connections и listening_ports. |
+| `network.iana_number` | Числовой IANA protocol number (строка). Для process_connections и listening_ports. |
 | `osquery.result.name` | имя запроса (processes, listening_ports, ...) |
 | `osquery.result.action` | added / removed |
 | `osquery.result.host_identifier` | hostname из osquery |
+| `osquery.result.unix_time` | unix timestamp события из osquery (числовая строка) |
 | `osquery.<column>` | все колонки запроса в flat-namespace |
 | `tags` | `["osquery","security","linux"]` |
+
+#### Сводная таблица event.dataset по запросам
+
+| Запрос | event.dataset |
+|--------|--------------|
+| processes, listening_ports, process_connections, logged_in_users, users, ssh_authorized_keys, kernel_modules, services, crontabs, sudoers, user_groups, groups, suid_bins, startup_items, mounts, iptables, routes, arp_cache, dns_resolvers, usb_devices, pci_devices, process_open_files, certificates, etc_hosts | `"osquery"` |
+| shell_history | `"osquery.shell_history"` |
+| last_logins | `"osquery.last"` |
+| preload_envs | `"osquery.process_envs"` |
+| python_packages_diff | `"osquery.python_packages"` |
+| npm_packages_diff | `"osquery.npm_packages"` |
+| pip_packages_diff | `"osquery.pip_packages"` |
+| deb_packages_diff | `"osquery.deb_packages"` |
+| kernel_keys_diff | `"osquery.kernel_keys"` |
+| sudoers_diff | `"osquery.sudoers"` |
+| acpi_tables_diff | `"osquery.acpi_tables"` |
+| suspicious_mmap | `"osquery.process_memory_map"` |
+| chrome_extensions_diff | `"osquery.chrome_extensions"` |
+| firefox_addons_diff | `"osquery.firefox_addons"` |
+| bpf_processes | `"osquery.bpf_process_events"` |
+| bpf_sockets | `"osquery.bpf_socket_events"` |
+| docker_containers | `"osquery.docker_containers"` |
 
 **Namespace'ы P2-02 (присутствуют только для соответствующих запросов):**
 
@@ -499,14 +564,14 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 - ECS: `process.pid`, `process.parent.pid`, `process.executable`, `process.command_line`, `user.id`, `user.group.id`, `process.exit_code`
 - `container.id` — резолвится из `/proc/<pid>/cgroup` путём парсинга Docker container ID из cgroup-пути (cgroup v2: `docker-<hex>.scope`, cgroup v1: `/docker/<hex>`). Первые 12 hex символов. Поле `cid` из osquery является cgroup namespace inode (числовой ID) на cgroup v2 хостах и **не используется** для резолвинга.
 - `container.name`, `container.image.name`, `container.entity_id` — резолвятся из `container_cache` по `container.id`. Кэш заполняется из `docker_containers` событий. **Если fluent-bit перезапущен** — первые события после рестарта не получат container-атрибуцию до прихода следующего `docker_containers` diff (≤30 сек).
-- `process.entity_id`: FNV-1a(host.name:pid:ntime) — ntime является kernel monotonic ns, поэтому ID **не совпадает** с auditd/processes (те используют epoch seconds). Known limitation до унификации через P0-01.
+- `process.entity_id`: FNV-1a(host.name:pid:ntime) — ntime является kernel monotonic nanoseconds, поэтому **НЕ совпадает** с auditd/processes (те используют epoch seconds). Known limitation до унификации через P0-01.
 - **UEBA**: event-driven (без polling gap); container-aware видимость через `/proc/<pid>/cgroup` lookup
 
 #### `bpf_sockets` (интервал: 10 сек, event-driven через eBPF)
 
 Каждый `connect` / `bind` / `accept`. Поля osquery: `pid, family, protocol, local_address, local_port, remote_address, remote_port, syscall, cid`.
 
-> **Важно:** колонка называется `syscall` (не `action`) — это системный вызов eBPF-пробы.
+> **Важно:** колонка в osquery называется `syscall` (не `action`) — это системный вызов eBPF-пробы. Enrich-скрипт читает `cols["syscall"] or cols["action"]` для совместимости.
 
 - `event.action: socket_<syscall>` → `socket_connect`, `socket_bind`, `socket_accept`
 - `event.dataset: osquery.bpf_socket_events`
@@ -542,6 +607,8 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 - SSH disconnect preauth, connection closed
 - PAM authentication failures
 
+> **OpenSSH 9.x**: В OpenSSH 9.x sshd запускает отдельный процесс `sshd-session` для каждого соединения. Enrich-скрипт принимает оба значения поля `program`: `"sshd"` и `"sshd-session"` — оба нормализуются с `process.name = "sshd"`.
+
 ### 5.2 Форматы строк и event.action
 
 | Шаблон строки auth.log | `event.action` | `event.outcome` | `event.type` |
@@ -571,7 +638,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | `event.action` | keyword | всегда | см. таблицу выше |
 | `event.type` | keyword | всегда | start / end / info |
 | `event.outcome` | keyword | если применимо | success / failure |
-| `process.name` | keyword | всегда | `"sshd"` |
+| `process.name` | keyword | всегда | `"sshd"` (нормализовано, включая `sshd-session` OpenSSH 9.x) |
 | `process.pid` | integer | если pid в строке | PID sshd-процесса |
 | `user.name` | keyword | если извлечён | имя пользователя |
 | `related.user` | keyword[] | если user.name | `[user.name]` |
@@ -586,7 +653,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 ### 5.4 Индекс
 
-`system-auth-YYYY.MM.dd` — динамический маппинг (без index template до P1-02).
+`system-auth-YYYY.MM.dd` — динамический маппинг (index template не создан, P1-02 не начато). До создания шаблона: `source.ip` может замапиться как `text` вместо `ip` — CIDR-фильтры не будут работать.
 
 ---
 
@@ -598,21 +665,24 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 |------|------|-----------|
 | Идентификатор пользователя | `user.id` (UID) | auditd, osquery |
 | Имя пользователя | `user.name` | все источники |
-| Реальный пользователь (до sudo) | `user.effective.id` | auditd (auid) |
+| Реальный пользователь (до sudo) | `user.effective.id` | auditd (auid — login UID, сохраняется через sudo) |
 | Хост | `host.name` | все источники |
-| Сессия пользователя | `user.session.id` | auditd, osquery — **join корректен**: одинаковая формула FNV-1a(host.name:btime:ses); объединяет все события от логина до выхода |
-| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed |
+| Сессия пользователя | `user.session.id` | auditd, osquery (processes/connections/files/logged_in_users) — **join корректен**: одинаковая формула FNV-1a(host.name:btime:ses); объединяет все события от логина до выхода |
+| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery — **join корректен**: одинаковая формула, одинаковый seed (epoch seconds) |
+| Процесс BPF (изолировано) | `process.entity_id` | osquery bpf_processes — **НЕ совпадает** с auditd/processes (seed: ntime в monotonic ns, не epoch) |
 | Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
 | Исходный IP (SSH) | `source.ip` | system-auth (fluent-bit), osquery logged_in_users |
-| Внешний IP | `destination.ip` | osquery process_connections |
+| Внешний IP | `destination.ip` | osquery process_connections, auditd connect/bind |
 | Команда | `process.command_line` | auditd (execve), osquery processes |
 | Контейнер | `container.id` | osquery bpf_processes, bpf_sockets, docker_containers — Docker short ID (12 hex), резолвится из `/proc/<pid>/cgroup` |
 | Контейнер (стабильный) | `container.entity_id` | osquery bpf_* и docker_containers — `host.name:container.name`, переживает рестарты контейнера |
 | Образ контейнера | `container.image.name` | osquery bpf_* и docker_containers |
 
-> **Кросс-источниковый join по `user.session.id` корректен**: одна формула `FNV-1a(host.name + ":" + btime + ":" + ses)` в обоих enrich-скриптах. Для auditd `ses` берётся из каждого события напрямую; для osquery — из `/proc/<pid>/sessionid`. Поле отсутствует если `ses = 0` (kernel) или `ses = 0xFFFFFFFF` (unset), либо если процесс завершился до enrich osquery.
+> **Кросс-источниковый join по `user.session.id` корректен**: одна формула `FNV-1a(host.name + ":" + btime + ":" + ses)` в обоих enrich-скриптах. Для auditd `ses` берётся из каждого события напрямую; для osquery — из `/proc/<pid>/sessionid`. Поле отсутствует если `ses = 0` (kernel) или `ses = 0xFFFFFFFF` (unset), либо если процесс завершился до enrich osquery, либо для запросов osquery без PID.
 
 > **Кросс-источниковый join auditd ↔ osquery по `process.entity_id` корректен** при условии, что оба enrich-скрипта используют одинаковую формулу: `FNV-1a(host.name + ":" + pid + ":" + start_time)`, где `start_time` берётся из `/proc/<pid>/stat field 22 + btime` (целое число, epoch seconds). Для exit-событий короткоживущих процессов поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует, что entity_id в этом документе **не совпадёт** с osquery.
+
+> **BPF process.entity_id исключение**: для таблицы `bpf_processes` seed = `host.name:pid:ntime` (ntime — kernel monotonic nanoseconds, не epoch). Join с auditd/processes по `process.entity_id` для bpf_processes **некорректен**.
 
 ---
 
@@ -629,9 +699,10 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | Файл | Зачем |
 |------|-------|
 | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон конфига osquery. Содержит полный список запросов и их SQL — источник schema. BPF-блоки (`bpf_processes`, `bpf_sockets`, `docker_containers`) включаются при `osquery_bpf_events_enabled: true` (группа `[docker_hosts]`). |
-| `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | Маппинг запросов → ECS категории/действия |
-| `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг |
-| `agents/configs/fluent-bit/scripts/sshd_enrich.lua` | ECS-нормализация auth.log sshd-строк → system-auth |
+| `agents/configs/fluent-bit/scripts/proc_common.lua` | Общая библиотека (shared module): `short_id()` (FNV-1a hash), кэши `pid→start_time/name/cmdline`, `read_proc_start()`, `get_sessionid()`, `make_session_id()`, `to_iso()`. Импортируется всеми тремя enrich-скриптами — изменение меняет behavior во всех пайплайнах. |
+| `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | Маппинг запросов → ECS категории/действия; table `QUERY_META` — истина о категоризации всех osquery событий |
+| `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг; таблица `SYSCALLS` — истина о поддерживаемых syscall номерах |
+| `agents/configs/fluent-bit/scripts/sshd_enrich.lua` | ECS-нормализация auth.log sshd-строк → system-auth; таблица `PATTERNS` — полный список поддерживаемых форматов строк |
 | `logstash/configs/pipeline/ueba-main.conf` | Входящие порты, type-cast, индексы |
 | `agents/configs/auditd/audit.rules` | Что именно перехватывает auditd (фильтр событий) |
 | `opensearch/templates/fluent-audit.json` | Точные типы ECS-полей в auditd-индексе (`wildcard`, `ip`, `date`, `integer`) |
@@ -643,10 +714,12 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 При построении UEBA-запросов учитывать типы полей из шаблонов (`opensearch/templates/`):
 
-- `source.ip`, `destination.ip` → тип `ip`: поддерживают CIDR (`source.ip: 10.0.0.0/8`)
+- `source.ip`, `destination.ip`, `related.ip` → тип `ip`: поддерживают CIDR (`source.ip: 10.0.0.0/8`)
 - `process.command_line`, `process.executable`, `file.path` → тип `wildcard`: glob-поиск (`*bash -c*`)
-- `process.start`, `process.parent.start` → тип `date` (ISO 8601 строки): date range и date math работают корректно
-- `process.pid`, `destination.port`, `auditd.session` → тип `integer`: числовые range-запросы
+- `process.start`, `process.parent.start` → тип `date` (ISO 8601 строки через `to_iso()`): date range и date math работают корректно
+- `process.pid`, `destination.port`, `auditd.session`, `process.exit_code` → тип `integer` / `long`: числовые range-запросы
+- `network.iana_number` → тип `keyword`: строковое значение IANA-номера протокола (не число)
+- `user.terminal` → тип `keyword`: имя tty/pts
 - все прочие строки → тип `keyword`: точный match и `terms` aggregation, без full-text поиска
 
-Для cross-index join auditd ↔ osquery использовать `process.entity_id` (keyword) и `user.session.id` (keyword) — оба поля одинаково заполняются в обоих источниках.
+Для cross-index join auditd ↔ osquery использовать `process.entity_id` (keyword) и `user.session.id` (keyword) — оба поля одинаково заполняются в обоих источниках (кроме bpf_processes — см. раздел 6).
