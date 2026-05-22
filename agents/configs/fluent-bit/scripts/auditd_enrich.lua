@@ -44,11 +44,15 @@ local SYSCALLS = {
 local EVENT_CATEGORY = {
     SYSCALL       = {"process"},
     EXECVE        = {"process"},
-    USER_LOGIN    = {"authentication","session"},
+    USER_LOGIN    = {"authentication"},
     USER_AUTH     = {"authentication"},
-    USER_LOGOUT   = {"session"},
-    USER_START    = {"session"},
-    USER_END      = {"session"},
+    USER_LOGOUT   = {"authentication"},
+    USER_START    = {"authentication"},    -- PAM session_open
+    USER_END      = {"authentication"},    -- PAM session_close
+    USER_ACCT     = {"authentication"},    -- PAM accounting
+    CRED_DISP     = {"authentication"},    -- PAM setcred (dispose)
+    CRED_REFR     = {"authentication"},    -- PAM setcred (refresh)
+    CRED_ACQ      = {"authentication"},    -- PAM setcred (acquire)
     USER_CMD      = {"process"},
     LOGIN         = {"authentication"},
     NETFILTER_CFG = {"network","configuration"},
@@ -141,6 +145,13 @@ function enrich_ecs(tag, timestamp, record)
     elseif etypes["EXECVE"]        then primary_type = "EXECVE"
     elseif etypes["USER_LOGIN"]    then primary_type = "USER_LOGIN"
     elseif etypes["USER_AUTH"]     then primary_type = "USER_AUTH"
+    elseif etypes["USER_START"]    then primary_type = "USER_START"
+    elseif etypes["USER_END"]      then primary_type = "USER_END"
+    elseif etypes["USER_ACCT"]     then primary_type = "USER_ACCT"
+    elseif etypes["USER_LOGOUT"]   then primary_type = "USER_LOGOUT"
+    elseif etypes["CRED_DISP"]     then primary_type = "CRED_DISP"
+    elseif etypes["CRED_REFR"]     then primary_type = "CRED_REFR"
+    elseif etypes["CRED_ACQ"]      then primary_type = "CRED_ACQ"
     elseif etypes["USER_CMD"]      then primary_type = "USER_CMD"
     elseif etypes["LOGIN"]         then primary_type = "LOGIN"
     elseif etypes["NETFILTER_CFG"] then primary_type = "NETFILTER_CFG"
@@ -324,6 +335,47 @@ function enrich_ecs(tag, timestamp, record)
         --]]
     end
 
+    -- ── PAM / USER события (USER_START, USER_END, CRED_DISP, CRED_REFR, …) ──
+    if primary_type == "USER_START"  or primary_type == "USER_END"
+    or primary_type == "USER_ACCT"   or primary_type == "USER_LOGOUT"
+    or primary_type == "CRED_DISP"   or primary_type == "CRED_REFR"
+    or primary_type == "CRED_ACQ" then
+
+        local etype = record["user_event_type"] or primary_type
+        record["event.action"] = etype:lower()
+
+        if primary_type == "USER_START" or primary_type == "USER_ACCT"
+        or primary_type == "CRED_ACQ" then
+            record["event.type"] = "start"
+        elseif primary_type == "USER_END" or primary_type == "USER_LOGOUT" then
+            record["event.type"] = "end"
+        else
+            record["event.type"] = "info"
+        end
+
+        local u_uid  = record["user_uid"]  or record["cred_disp_uid"]  or record["cred_refr_uid"]
+        local u_name = record["user_acct"] or record["cred_disp_acct"] or record["cred_refr_acct"]
+        local u_exe  = record["user_exe"]  or record["cred_disp_exe"]  or record["cred_refr_exe"]
+        local u_pid  = tonumber(record["user_pid"] or record["cred_disp_pid"] or record["cred_refr_pid"])
+
+        if u_uid  and u_uid  ~= "" then record["user.id"]            = u_uid  end
+        if u_name and u_name ~= "" then record["user.name"]          = u_name end
+        if u_exe  and u_exe  ~= "" then record["process.executable"] = u_exe  end
+        if u_pid                   then record["process.pid"]         = u_pid  end
+
+        -- collect keys to delete first, then delete (safe iteration)
+        local keys_to_del = {}
+        for k in pairs(record) do
+            for _, prefix in ipairs({"user_", "cred_disp_", "cred_refr_", "cred_acq_"}) do
+                if k:sub(1, #prefix) == prefix then
+                    keys_to_del[#keys_to_del+1] = k
+                    break
+                end
+            end
+        end
+        for _, k in ipairs(keys_to_del) do record[k] = nil end
+    end
+
     -- ── Файл (из PATH и CWD) ──
     local paths = record["_paths"]
     if paths and #paths > 0 then
@@ -380,6 +432,8 @@ function enrich_ecs(tag, timestamp, record)
     -- ── Результат события ──
     local success = record["syscall_success"] or record["user_res"]
     if success then
+        -- strip trailing control chars (auditd appends GS 0x1D to PAM fields)
+        success = success:match("^([%a]+)") or success
         record["event.outcome"] = (success == "yes" or success == "success")
             and "success" or "failure"
     end
