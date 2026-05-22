@@ -96,6 +96,22 @@
         mode: "0644"
       register: cfg_patterns
 
+    - name: Применить index templates в OpenSearch
+      ansible.builtin.uri:
+        url: "{{ opensearch_url }}/_index_template/{{ item }}"
+        method: PUT
+        body_format: json
+        body: "{{ lookup('file', playbook_dir + '/../../opensearch/templates/' + item + '.json') }}"
+        user: "{{ opensearch_user }}"
+        password: "{{ opensearch_password }}"
+        force_basic_auth: yes
+        validate_certs: "{{ (opensearch_ssl_verify | default('false')) | bool }}"
+        ca_path: "{{ deploy_dir }}/certs/opensearch-ca.pem"
+        status_code: [200, 201]
+      loop:
+        - fluent-audit
+        - fluent-osquery
+
     - name: Вытянуть Docker-образ Logstash
       ansible.builtin.command:
         cmd: docker pull "{{ logstash_image }}"

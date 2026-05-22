@@ -4,7 +4,7 @@
   "_meta": {
     "description": "UEBA auditd events — ECS 8.11 normalization via fluent-bit",
     "source": "ueba-stand/opensearch/templates",
-    "version": "1.0"
+    "version": "2.0"
   },
   "template": {
     "settings": {
@@ -30,14 +30,14 @@
         "@timestamp": { "type": "date" },
         "ecs": {
           "properties": {
-            "version": { "type": "keyword" }
+            "version": { "type": "constant_keyword", "value": "8.11" }
           }
         },
         "event": {
           "properties": {
             "kind":     { "type": "keyword" },
-            "dataset":  { "type": "keyword" },
-            "module":   { "type": "keyword" },
+            "dataset":  { "type": "constant_keyword", "value": "auditd" },
+            "module":   { "type": "constant_keyword", "value": "auditd" },
             "category": { "type": "keyword" },
             "type":     { "type": "keyword" },
             "action":   { "type": "keyword" },
@@ -109,7 +109,14 @@
             "gid":       { "type": "keyword" },
             "inode":     { "type": "keyword" },
             "device":    { "type": "keyword" },
-            "extension": { "type": "keyword" }
+            "extension": { "type": "keyword" },
+            "hash": {
+              "properties": {
+                "md5":    { "type": "keyword" },
+                "sha1":   { "type": "keyword" },
+                "sha256": { "type": "keyword" }
+              }
+            }
           }
         },
         "network": {
@@ -135,6 +142,13 @@
             "address": { "type": "keyword" }
           }
         },
+        "related": {
+          "properties": {
+            "user": { "type": "keyword" },
+            "ip":   { "type": "ip" },
+            "hash": { "type": "keyword" }
+          }
+        },
         "auditd": {
           "properties": {
             "session": { "type": "integer" },
@@ -151,6 +165,7 @@
             }
           }
         },
+        "key": { "type": "keyword" },
         "labels": {
           "properties": {
             "entity_id_source": { "type": "keyword" },

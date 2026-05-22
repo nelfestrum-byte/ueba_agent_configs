@@ -15,34 +15,32 @@ Linux-хост
   │     └── /var/log/audit/audit.log
   │               └── fluent-bit
   │                     ├── auditd_merge.lua   — объединение по serial
-  │                     ├── auditd_enrich.lua  — ECS 8.x нормализация
-  │                     └── TCP 5045 ──────────────────────┐
-  │                                                         │
-  ├── osquery (diff-мониторинг)                             │
-  │     └── /var/log/osquery/osqueryd.results.log           │
-  │               └── fluent-bit                            │
-  │                     ├── osquery_enrich.lua — ECS 8.x    │
-  │                     └── TCP 5047 ──────────────────────┤
-  │                                                         │
-  └── filebeat [временный, будет заменён на fluent-bit]     │
-        └── /var/log/auth.log (SSH)                         │
-              └── beats 5044 ──────────────────────────────┤
-                                                            │
-                                                     Logstash
-                                                            │
-                                                      OpenSearch
-                                                 ├── fluent-audit-YYYY.MM.dd
-                                                 ├── fluent-osquery-YYYY.MM.dd
-                                                 └── filebeat-{ver}-YYYY.MM.dd
+  │                     ├── auditd_enrich.lua  — ECS 8.11 + process.entity_id
+  │                     └── TCP 5045 ──────────────────────────┐
+  │                                                             │
+  └── osquery (diff-мониторинг)                                │
+        └── /var/log/osquery/osqueryd.results.log              │
+                  └── fluent-bit                               │
+                        ├── osquery_enrich.lua — ECS 8.11      │
+                        └── TCP 5047 ──────────────────────────┤
+                                                               │
+                                                          Logstash
+                                                               │
+                                                         OpenSearch
+                                                    ├── fluent-audit-YYYY.MM.dd
+                                                    └── fluent-osquery-YYYY.MM.dd
 ```
+
+На **docker-хостах** (группа `[docker_hosts]`, ядро ≥ 5.10) osquery дополнительно использует BPF backend — таблицы `bpf_process_events`, `bpf_socket_events`, `docker_containers` с container-aware видимостью.
 
 ## Стек агентов
 
 | Сервис | Роль | Индекс |
 |--------|------|--------|
-| **auditd** + **fluent-bit** | Kernel audit: execve, sudo, auth, файловые события | `fluent-audit-*` |
-| **osquery** + **fluent-bit** | Diff-мониторинг: процессы, соединения, пользователи, модули, cron, SSH-ключи | `fluent-osquery-*` |
-| **fluent-bit** | SSH auth.log → sshd_enrich.lua | `system-auth-*` |
+| **auditd** + **fluent-bit** | Kernel audit: execve, sudo, auth, network, file integrity; syscall-правила (io_uring, ptrace, memfd_create, bpf, process_vm) | `fluent-audit-*` |
+| **osquery** + **fluent-bit** | Diff-мониторинг: процессы, соединения, пользователи, модули, cron, SSH-ключи, shell_history, пакеты; BPF events на docker-хостах | `fluent-osquery-*` |
+
+**auditbeat не используется** — конфликтует с auditd за audit netlink-сокет.
 
 ---
 
@@ -52,21 +50,23 @@ Linux-хост
 
 | Компонент | Требования |
 |-----------|-----------|
-| Logstash-хост | Debian/Ubuntu, Docker 24+, Docker Compose v2, пользователь `installer` в группе `docker` |
+| Logstash-хост | Debian/Ubuntu, Docker 24+, Docker Compose v2, пользователь в группе `docker` |
 | Агентские хосты | Debian/Ubuntu, пользователь с sudo |
-| Ansible (control node) | Ansible 2.14+, доступ по SSH к целевым хостам |
+| Docker-хосты (опц.) | Ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6 (для BPF backend) |
+| Ansible (control node) | Ansible 2.14+, SSH-доступ к целевым хостам |
 
 ---
 
 ### 1. Logstash (Docker)
 
 Logstash разворачивается в Docker на выделенном хосте и принимает события от всех агентов.
+Деплой также автоматически применяет index templates в OpenSearch.
 
 **Первоначальная настройка:**
 
 ```bash
 cd logstash/deploy
-cp inventory.ini.example inventory.ini     # указать IP хоста
+cp inventory.ini.example inventory.ini           # указать IP хоста
 cp group_vars/all.yml.example group_vars/all.yml  # указать URL OpenSearch
 ```
 
@@ -93,6 +93,8 @@ cd logstash/deploy
 ansible-playbook logstash-deploy.yml --ask-vault-pass
 ```
 
+Плейбук разворачивает Logstash и сразу применяет index templates (`fluent-audit`, `fluent-osquery`) через OpenSearch REST API.
+
 **Проверка:**
 ```bash
 # На Logstash-хосте:
@@ -102,7 +104,7 @@ curl -sf http://localhost:9600/_node/stats | python3 -m json.tool | grep -A2 '"e
 
 ---
 
-### 2. Агенты (auditd + fluent-bit + filebeat + osquery)
+### 2. Агенты (auditd + fluent-bit + osquery)
 
 **Первоначальная настройка:**
 
@@ -114,10 +116,14 @@ cp group_vars/all.yml.example group_vars/all.yml
 
 `group_vars/all.yml`:
 ```yaml
-logstash_host:    10.0.0.5      # IP/hostname Logstash
-elastic_version:  "9.4.1"
-filebeat_arch:    "amd64"       # или arm64
-osquery_version:  "5.23.0"
+logstash_host:   10.0.0.5      # IP/hostname Logstash
+osquery_version: "5.23.0"
+fluent_bit_version: "3.x.x"
+```
+
+Для docker-хостов создать `group_vars/docker_hosts.yml`:
+```yaml
+osquery_bpf_events_enabled: true
 ```
 
 **Подготовка пакетов (офлайн):**
@@ -131,17 +137,14 @@ cd agents/deploy
 ansible-playbook agents-deploy.yml --ask-become-pass
 ```
 
-Плейбук: устанавливает и настраивает auditd, fluent-bit, filebeat, osquery; раскладывает конфиги и Lua-скрипты; запускает сервисы.
+Плейбук устанавливает auditd, fluent-bit, osquery; раскладывает конфиги и Lua-скрипты; запускает сервисы.
 
 **Проверка на агенте:**
 ```bash
-systemctl status auditd fluent-bit filebeat osqueryd
+systemctl status auditd fluent-bit osqueryd
 
-# Метрики fluent-bit (включая состояние Lua-скриптов):
+# Метрики fluent-bit (pipeline health, состояние Lua-скриптов):
 curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
-
-# Диагностика: если filter.lua.0.add_records = 0 при ненулевом input.tail.0.records
-# — merge-скрипт не флашит буфер. Проверить auditd_merge.lua timeout.
 ```
 
 ---
@@ -158,7 +161,7 @@ docker compose logs -f logstash
 
 OpenSearch Dashboards: http://localhost:5601
 
-Тестовые события можно отправить скриптами из `dev_stand/scripts/`.
+Тестовые события: `dev_stand/scripts/send-auditd.sh`, `dev_stand/scripts/send-osquery.sh`.
 
 ---
 
@@ -166,81 +169,64 @@ OpenSearch Dashboards: http://localhost:5601
 
 ```bash
 # Список индексов:
-curl -s 'http://opensearch:9200/_cat/indices?v&index=fluent-*,filebeat-*' | sort
+curl -s 'http://opensearch:9200/_cat/indices?v&index=fluent-*' | sort
 
-# Первые события после запуска:
-# ssh <host>         → filebeat-* (system.auth)
-# sudo <cmd>         → fluent-audit-* (event.action: sudo / privilege_use)
-# любой execve       → fluent-audit-* (event.category: process)
-# osquery diff ~30с  → fluent-osquery-* (event.dataset: osquery)
+# Первые события после запуска агентов:
+# sudo <cmd>          → fluent-audit-*  (event.action: privilege_use)
+# любой execve        → fluent-audit-*  (event.category: process)
+# ssh user@host       → fluent-audit-*  (event.action: session_opened, event.module: auditd)
+# osquery diff ~30с   → fluent-osquery-* (event.dataset: osquery.processes и пр.)
 ```
 
 ---
 
 ## OpenSearch Index Templates
 
-Готовые шаблоны индексов лежат в [`opensearch/templates/`](opensearch/templates/):
+Шаблоны индексов в [`opensearch/templates/`](opensearch/templates/) применяются автоматически при деплое Logstash (`logstash-deploy.yml`).
 
-| Шаблон | Index Pattern |
-|--------|---------------|
-| `fluent-audit.json` | `fluent-audit-*` |
-| `fluent-osquery.json` | `fluent-osquery-*` |
-| `filebeat-auth.json` | `filebeat-*` |
+| Шаблон | Index Pattern | Версия |
+|--------|---------------|--------|
+| `fluent-audit.json` | `fluent-audit-*` | 2.0 |
+| `fluent-osquery.json` | `fluent-osquery-*` | 2.0 |
 
-Применяются вручную через OpenSearch REST API. Инструкция: [`opensearch/templates/README.md`](opensearch/templates/README.md).
+Шаблоны фиксируют типы всех ECS-полей: `source.ip`/`destination.ip` как `ip`, `process.command_line` как `wildcard`, `event.module` как `constant_keyword`. Без шаблона OpenSearch угадывает типы по первому документу, что ломает CIDR-фильтры и агрегации.
 
-```bash
-# Пример применения одного шаблона:
-curl -u admin:password -X PUT "https://opensearch:9200/_index_template/fluent-audit" \
-  -H "Content-Type: application/json" --data-binary @opensearch/templates/fluent-audit.json
-```
+Инструкция по ручному применению: [`opensearch/templates/README.md`](opensearch/templates/README.md).
 
 ---
 
 ## Известные ограничения
 
-- **auditd 4.x**: не пишет `type=EOE` в audit.log. `auditd_merge.lua` использует wall-clock timeout (не EOE) для флаша буфера.
-- **TLS не настроен**: fluent-bit → Logstash по TCP без шифрования. Для прода использовать beats-протокол с mTLS.
+- **auditd 4.x**: не пишет `type=EOE` в audit.log. `auditd_merge.lua` использует wall-clock timeout для флаша буфера — не EOE.
+- **TLS не настроен**: fluent-bit → Logstash по plaintext TCP. Задача P1-03 (mTLS) запланирована.
 - **CA-сертификат** не хранится в git — положить вручную перед деплоем Logstash.
 - **Офлайн-пакеты** (`*.deb`) не хранятся в git — перезапустить `fetch.ps1` при смене версий.
+- **Index templates не применяются ретроактивно** — существующие индексы сохраняют старые маппинги до истечения retention.
 
-### ⚠️ osquery BPF backend: переполнение буфера (docker-хосты)
+### osquery BPF backend: переполнение буфера (docker-хосты)
 
 На нагруженных docker-хостах eBPF perf-ring-буфер может переполняться, что приводит к **молчаливой потере событий** в `bpf_process_events` и `bpf_socket_events`.
 
 **Диагностика:**
 
 ```bash
-# 1. События с ошибкой пробы — probe_error=1 означает drop на уровне eBPF:
+# probe_error=1 означает drop на уровне eBPF:
 grep '"probe_error":"1"' /var/log/osquery/osqueryd.results.log | wc -l
 
-# 2. Сообщения о переполнении в логе osquery:
+# Сообщения о переполнении в логе osquery:
 grep -iE 'lost|overflow|drop' /var/log/osquery/osqueryd.WARNING 2>/dev/null | tail -20
 
-# 3. В OpenSearch Dashboards: фильтр osquery.probe_error:1
-#    Если таких событий > 1% от bpf_process_events — буфер мал.
+# В OpenSearch: фильтр osquery.probe_error:1
+# Если > 1% от bpf_process_events — буфер мал.
 ```
 
-**Параметры и где менять:**
+**Параметры** (`agents/configs/osquery/osquery.conf.j2`, блок `{% if osquery_bpf_events_enabled %}`):
 
-Файл: `agents/configs/osquery/osquery.conf.j2`, блок `{% if osquery_bpf_events_enabled %}` в секции `options`:
+| Параметр | Значение | Описание |
+|---|---|---|
+| `bpf_perf_event_array_exp` | `14` | Размер perf ring-буфера: 2^N страниц × 4 КБ на каждое CPU (14 → 64 МБ/CPU) |
+| `bpf_buffer_storage_size` | `1024` | Внутренний буфер osquery в МБ |
 
-| Параметр | Текущее значение | Описание | Когда увеличить |
-|---|---|---|---|
-| `bpf_perf_event_array_exp` | `14` | Размер perf ring-буфера: 2^N страниц × 4 КБ **на каждое CPU**. Значение 14 → 64 МБ/CPU | Много короткоживущих процессов (CI/CD), `probe_error` > 0 |
-| `bpf_buffer_storage_size` | `1024` | Внутренний буфер osquery в МБ для BPF-событий до их записи в лог | Высокий throughput сокет-событий |
+Рекомендуемые значения для busy-хостов: `bpf_perf_event_array_exp: 15`, `bpf_buffer_storage_size: 2048`.
 
-```jsonc
-// agents/configs/osquery/osquery.conf.j2 — рекомендуемые значения для busy-хостов:
-"bpf_perf_event_array_exp": "15",   // 128 МБ/CPU (было 14 → 64 МБ/CPU)
-"bpf_buffer_storage_size": "2048",  // 2 ГБ (было 1024)
-```
-
-После изменения — раскатить и перезапустить osqueryd:
-
-```bash
-cd agents/deploy
-ansible-playbook agents-deploy.yml --ask-become-pass --limit=<docker-host> --tags=osquery
-```
-
-> **Память:** `bpf_perf_event_array_exp=15` на 4-ядерном хосте потребляет ~512 МБ RAM только под perf-буферы. Увеличивать осторожно на хостах с ограниченной памятью.
+> **Память:** `bpf_perf_event_array_exp=15` на 4-ядерном хосте потребляет ~512 МБ RAM под perf-буферы.

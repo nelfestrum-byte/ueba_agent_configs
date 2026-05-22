@@ -8,9 +8,10 @@
 | Файл | Index Pattern | Приоритет | Описание |
 |------|---------------|-----------|----------|
 | `fluent-audit.json` | `fluent-audit-*` | 200 | auditd события: execve, network, file, auth |
-| `fluent-osquery.json` | `fluent-osquery-*` | 200 | osquery diff-события + `osquery.*` namespace |
-| `system-auth.json` | `system-auth-*` | 200 | SSH auth события из journald via sshd_enrich.lua |
-| `filebeat-auth.json` | `filebeat-*` | 50 | устаревший (filebeat удалён, заменён system-auth) |
+| `fluent-osquery.json` | `fluent-osquery-*` | 200 | osquery diff-события + `osquery.*` namespace + `container.*` (BPF) |
+| `system-auth.json` | `system-auth-*` | 200 | **не активен** — SSH pipeline удалён (P0-03) |
+
+Применение через Ansible автоматизировано в `logstash/deploy/logstash-deploy.yml` (только fluent-audit и fluent-osquery). Ручное применение описано ниже.
 
 ---
 
@@ -23,7 +24,7 @@ BASE="https://opensearch.host:9200"
 CREDS="admin:your_password"      # заменить
 CACERT="--cacert /path/to/opensearch-ca.pem"   # или -k для dev
 
-for name in fluent-audit fluent-osquery system-auth; do
+for name in fluent-audit fluent-osquery; do
   echo "→ $name"
   curl -s -u "$CREDS" $CACERT \
     -X PUT "$BASE/_index_template/$name" \
@@ -39,7 +40,7 @@ $BASE    = "https://opensearch.host:9200"
 $CREDS   = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:your_password"))
 $Headers = @{ Authorization = "Basic $CREDS"; "Content-Type" = "application/json" }
 
-foreach ($name in "fluent-audit", "fluent-osquery", "system-auth") {
+foreach ($name in "fluent-audit", "fluent-osquery") {
     $body = Get-Content -Raw "$PSScriptRoot\$name.json"
     $resp = Invoke-RestMethod -Method Put `
         -Uri "$BASE/_index_template/$name" `
@@ -57,7 +58,7 @@ foreach ($name in "fluent-audit", "fluent-osquery", "system-auth") {
 
 ```bash
 # Список всех UEBA-шаблонов:
-curl -s -u "$CREDS" "$BASE/_cat/templates?v&name=fluent-*,system-auth*"
+curl -s -u "$CREDS" "$BASE/_cat/templates?v&name=fluent-*"
 
 # Полный шаблон:
 curl -s -u "$CREDS" "$BASE/_index_template/fluent-audit" | python3 -m json.tool
@@ -86,9 +87,15 @@ curl -s -u "$CREDS" "$BASE/fluent-audit-$(date +%Y.%m.%d)/_mapping" | python3 -m
 | Поле | Тип | Причина |
 |------|-----|---------|
 | `process.command_line`, `process.executable`, `file.path` | `wildcard` | Эффективный glob-поиск: `*bash -c*`, `*/tmp/*` |
-| `source.ip`, `destination.ip` | `ip` | CIDR-запросы: `source.ip: 10.0.0.0/8` |
+| `source.ip`, `destination.ip`, `related.ip` | `ip` | CIDR-запросы: `source.ip: 10.0.0.0/8` |
 | `process.start`, `process.parent.start` | `date` | ISO 8601 строки от `common.to_iso()` |
 | `process.pid`, `auditd.session` | `integer` | Числовые range-запросы |
 | `osquery.result.unix_time` | `long` | Epoch timestamp из osquery JSON |
+| `event.module`, `ecs.version` | `constant_keyword` | Одно значение на индекс — экономия CPU/диска |
+| `event.dataset` (audit) | `constant_keyword` | Всегда "auditd" для fluent-audit-* |
+| `event.dataset` (osquery) | `keyword` | Варьируется: osquery.processes, osquery.bpf_process_events и др. |
+| `key` (audit, top-level) | `keyword` | auditd rule key: fileless_exec, process_injection и пр. |
+| `container.*` (osquery) | `keyword` | BPF backend: container.id, name, entity_id, image.name |
+| `file.hash.*` (audit) | `keyword` | md5/sha1/sha256 — точный lookup без full-text |
 | все прочие строки (dynamic template) | `keyword` | Агрегации и точный поиск без text/analyzer overhead |
 | `total_fields.limit: 2000` (osquery) | — | osquery содержит разные колонки по ~20 запросам |

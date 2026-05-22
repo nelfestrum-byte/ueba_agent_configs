@@ -20,7 +20,7 @@
 | ~~P0-03~~ | ~~Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`)~~ — **УДАЛЕНО** (дублирует auditd) | ~1 день | — |
 | **P0-04** | **Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm ✓ ВЫПОЛНЕНО 2026-05-22** | ~2-3 часа | учитывает P1-01 уточнения |
 | **P1-01** | **Gap-анализ audit.rules против Neo23x0 ruleset (Tier A + Tier B) ✓ ВЫПОЛНЕНО 2026-05-22** | ~3-4 часа | — |
-| P1-02 | ECS Index Templates для OpenSearch (3 шаблона) | ~4 часа | после P0-01, P0-02 |
+| **P1-02** | **ECS Index Templates для OpenSearch (2 шаблона) ✓ ВЫПОЛНЕНО 2026-05-22** | ~4 часа | после P0-01, P0-02 |
 | P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | — |
 | P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-04, P1-01 |
 | **P2-01** | **osquery BPF backend + docker_containers + container.entity_id — фундамент поведенческой модели контейнеров ✓ ВЫПОЛНЕНО 2026-05-21** | ~1.5 дня | cross-task с P0-04 (whitelist) |
@@ -423,8 +423,8 @@ Neo23x0 подтверждает направление P0-04. Уточнени�
 
 **Приоритет:** P1 (стабильность маппингов)
 **Стоимость:** ~4 часа (шаблоны + Ansible-task для PUT + проверка на dev-стенде)
-**Статус:** не начато
-**Зависимости:** делать **после** P0-01 (появится `process.entity_id`) и **после** P0-03 (появится индекс `system-auth-*`). Тогда шаблоны пишутся сразу полные.
+**Статус:** **выполнено 2026-05-22** — 2 шаблона (fluent-audit v2.0, fluent-osquery v2.0); system-auth не создавался (P0-03 удалён). Ansible-таск PUT добавлен в logstash-deploy.yml.
+**Зависимости:** после P0-01 (process.entity_id), после P0-02 (user.session.id). P0-03 удалён — system-auth шаблон не нужен.
 
 ### Зачем (P1-02)
 

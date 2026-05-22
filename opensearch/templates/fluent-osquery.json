@@ -4,7 +4,7 @@
   "_meta": {
     "description": "UEBA osquery diff events — ECS 8.11 + osquery.* namespace",
     "source": "ueba-stand/opensearch/templates",
-    "version": "1.0"
+    "version": "2.0"
   },
   "template": {
     "settings": {
@@ -30,14 +30,14 @@
         "@timestamp": { "type": "date" },
         "ecs": {
           "properties": {
-            "version": { "type": "keyword" }
+            "version": { "type": "constant_keyword", "value": "8.11" }
           }
         },
         "event": {
           "properties": {
             "kind":     { "type": "keyword" },
             "dataset":  { "type": "keyword" },
-            "module":   { "type": "keyword" },
+            "module":   { "type": "constant_keyword", "value": "osquery" },
             "category": { "type": "keyword" },
             "type":     { "type": "keyword" },
             "action":   { "type": "keyword" },
@@ -114,6 +114,25 @@
             "ip":      { "type": "ip" },
             "port":    { "type": "integer" },
             "address": { "type": "keyword" }
+          }
+        },
+        "container": {
+          "properties": {
+            "id":        { "type": "keyword" },
+            "name":      { "type": "keyword" },
+            "runtime":   { "type": "keyword" },
+            "entity_id": { "type": "keyword" },
+            "image": {
+              "properties": {
+                "name": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "related": {
+          "properties": {
+            "user": { "type": "keyword" },
+            "ip":   { "type": "ip" }
           }
         },
         "osquery": {
