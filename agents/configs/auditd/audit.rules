@@ -113,13 +113,6 @@
 -a always,exit -F arch=b64 -S rename -S renameat -S renameat2 -F dir=/usr/sbin -k binary_modification
 -a always,exit -F arch=b64 -S rename -S renameat -S renameat2 -F dir=/bin      -k binary_modification
 
-# ── Вход/выход пользователей и сессии ───────────────────────────────────────
--w /var/log/faillog  -p wa -k login_failure
--w /var/log/lastlog  -p wa -k login_tracking
--w /var/run/utmp     -p wa -k session_tracking
--w /var/log/wtmp     -p wa -k session_tracking
--w /var/log/btmp     -p wa -k session_tracking
-
 # ── Аудит конфигурации auditd ────────────────────────────────────────────────
 -w /etc/audit/   -p wa -k audit_config_change
 -w /etc/audisp/  -p wa -k audit_config_change

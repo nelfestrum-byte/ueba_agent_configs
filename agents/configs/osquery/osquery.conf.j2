@@ -100,16 +100,6 @@
       "interval": 120
     },
 
-    "arp_cache": {
-      "query": "SELECT address, mac, interface, (SELECT hostname FROM system_info) AS hostname FROM arp_cache WHERE address NOT IN ('127.0.0.1', '::1')",
-      "interval": 60
-    },
-
-    "sudoers": {
-      "query": "SELECT header, rule_details, (SELECT hostname FROM system_info) AS hostname FROM sudoers",
-      "interval": 120
-    },
-
     "mounts": {
       "query": "SELECT device, path, type, flags, (SELECT hostname FROM system_info) AS hostname FROM mounts WHERE type NOT IN ('proc', 'sysfs', 'devtmpfs', 'devpts', 'tmpfs', 'securityfs', 'cgroup', 'cgroup2', 'pstore', 'bpf', 'autofs', 'mqueue', 'hugetlbfs', 'debugfs', 'tracefs', 'configfs', 'fusectl', 'efivarfs')",
       "interval": 120
@@ -135,19 +125,9 @@
       "interval": 3600
     },
 
-    "process_open_files": {
-      "query": "SELECT p.pid, p.name, p.path AS process_path, pof.path AS file_path, pof.fd, u.username, (SELECT hostname FROM system_info) AS hostname FROM process_open_files pof JOIN processes p ON pof.pid = p.pid LEFT JOIN users u ON p.uid = u.uid WHERE p.uid >= 1000 AND pof.path NOT LIKE '/proc/%' AND pof.path NOT LIKE '/dev/%' AND pof.path NOT LIKE '/sys/%' AND pof.path != ''",
-      "interval": 60
-    },
-
     "startup_items": {
       "query": "SELECT name, path, args, type, source, status, username, (SELECT hostname FROM system_info) AS hostname FROM startup_items",
       "interval": 300
-    },
-
-    "groups": {
-      "query": "SELECT gid, groupname, (SELECT hostname FROM system_info) AS hostname FROM groups",
-      "interval": 120
     },
 
     "user_groups": {
