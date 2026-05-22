@@ -93,6 +93,11 @@
                 "name": { "type": "keyword" }
               }
             },
+            "target": {
+              "properties": {
+                "name": { "type": "keyword" }
+              }
+            },
             "session": {
               "properties": {
                 "id": { "type": "keyword" }

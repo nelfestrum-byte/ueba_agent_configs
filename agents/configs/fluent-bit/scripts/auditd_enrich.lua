@@ -250,8 +250,16 @@ function enrich_ecs(tag, timestamp, record)
         if record["auid_name"] then record["user.effective.name"] = record["auid_name"] end
     end
 
-    if record["user_acct"] then
-        record["user.name"] = record["user_acct"]
+    -- user.name = имя вызывающего процесса (uid_name, соответствует user.id/uid).
+    -- Устанавливаем ДО очистки uid_name.
+    if record["uid_name"] and record["uid_name"] ~= "" then
+        record["user.name"] = record["uid_name"]
+    end
+
+    -- user.target.name = целевая учётная запись PAM/sudo (acct-поле auditd).
+    -- Отличается от user.name при sudo (installer → root).
+    if record["user_acct"] and record["user_acct"] ~= "" then
+        record["user.target.name"] = record["user_acct"]
     end
 
     record["uid_name"]  = nil
@@ -368,15 +376,17 @@ function enrich_ecs(tag, timestamp, record)
             record["event.type"] = "info"
         end
 
-        local u_uid  = record["user_uid"]  or record["cred_disp_uid"]  or record["cred_refr_uid"]
-        local u_name = record["user_acct"] or record["cred_disp_acct"] or record["cred_refr_acct"]
-        local u_exe  = record["user_exe"]  or record["cred_disp_exe"]  or record["cred_refr_exe"]
-        local u_pid  = tonumber(record["user_pid"] or record["cred_disp_pid"] or record["cred_refr_pid"])
+        local u_uid    = record["user_uid"]   or record["cred_disp_uid"]   or record["cred_refr_uid"]
+        local u_target = record["user_acct"]  or record["cred_disp_acct"]  or record["cred_refr_acct"]
+        local u_exe    = record["user_exe"]   or record["cred_disp_exe"]   or record["cred_refr_exe"]
+        local u_pid    = tonumber(record["user_pid"] or record["cred_disp_pid"] or record["cred_refr_pid"])
 
-        if u_uid  and u_uid  ~= "" then record["user.id"]            = u_uid  end
-        if u_name and u_name ~= "" then record["user.name"]          = u_name end
-        if u_exe  and u_exe  ~= "" then record["process.executable"] = decode_hex_str(u_exe)  end
-        if u_pid                   then record["process.pid"]         = u_pid  end
+        if u_uid    and u_uid    ~= "" then record["user.id"]            = u_uid    end
+        -- user.name уже установлен из uid_name в глобальном блоке выше.
+        -- user_acct (target account) → user.target.name.
+        if u_target and u_target ~= "" then record["user.target.name"]   = u_target end
+        if u_exe    and u_exe    ~= "" then record["process.executable"] = decode_hex_str(u_exe) end
+        if u_pid                       then record["process.pid"]        = u_pid    end
 
         -- collect keys to delete first, then delete (safe iteration)
         local keys_to_del = {}
