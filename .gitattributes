@@ -1,0 +1,9 @@
+# Files excluded from git archive (client distribution builds)
+CLAUDE.md               export-ignore
+README_FOR_AI.md        export-ignore
+CONTAINER_BEHAVIOR_PLAN.md export-ignore
+HARDENING/              export-ignore
+dev_stand/              export-ignore
+tests/                  export-ignore
+.claude/                export-ignore
+make-dist.ps1           export-ignore
