@@ -11,6 +11,12 @@ local common = require("proc_common")
 -- Кэш теряется при рестарте fluent-bit.
 local container_cache = {}
 
+-- Маппинг pid → container_id для процессов, чей cgroup уже был успешно прочитан.
+-- Используется как fallback для дочерних процессов (parent chain).
+local pid_cid_cache      = {}
+local _pid_cid_size      = 0
+local PID_CID_CACHE_MAX  = 5000
+
 -- Читает /proc/<pid>/cgroup и возвращает первые 12 символов Docker container ID.
 -- cgroup v2: "0::/system.slice/docker-<hex>.scope"
 -- cgroup v1: ".../docker/<hex>"
@@ -24,6 +30,38 @@ local function get_docker_cid(pid)
     local cid = content:match("docker%-(%x+)%.scope")
     if not cid then cid = content:match("/docker/(%x+)") end
     if cid and #cid >= 12 then return string.sub(cid, 1, 12) end
+    return nil
+end
+
+-- Пытается определить Docker container ID для процесса pid.
+-- Порядок: /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache[ppid].
+local function resolve_container_id(pid, parent_pid)
+    local function cache_put(p, cid)
+        if not p or p == "" then return end
+        if _pid_cid_size >= PID_CID_CACHE_MAX then
+            pid_cid_cache = {}
+            _pid_cid_size = 0
+        end
+        if not pid_cid_cache[p] then _pid_cid_size = _pid_cid_size + 1 end
+        pid_cid_cache[p] = cid
+    end
+
+    local cid = get_docker_cid(pid)
+    if cid then
+        cache_put(tostring(pid), cid)
+        return cid
+    end
+
+    if parent_pid and parent_pid ~= "" and parent_pid ~= "0" then
+        cid = get_docker_cid(parent_pid)
+        if cid then
+            cache_put(tostring(parent_pid), cid)
+            return cid
+        end
+        cid = pid_cid_cache[tostring(parent_pid)]
+        if cid then return cid end
+    end
+
     return nil
 end
 
@@ -538,11 +576,15 @@ function enrich_osquery(tag, timestamp, record)
             record["process.entity_id"] = common.short_id(seed)
         end
 
-        -- container resolution через /proc/<pid>/cgroup → Docker short ID
+        -- container resolution: /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache
         -- cols["cid"] — cgroup namespace inode (число), не Docker ID, не используем
-        local cid = get_docker_cid(cols["pid"])
+        local cid = resolve_container_id(cols["pid"], cols["parent"])
         if cid then
             record["container.id"] = cid
+            -- кэшируем pid для последующих bpf_socket_events того же процесса
+            if cols["pid"] and cols["pid"] ~= "" then
+                pid_cid_cache[tostring(cols["pid"])] = cid
+            end
             local meta = container_cache[cid]
             if meta then
                 record["container.name"]       = meta.name
@@ -591,8 +633,8 @@ function enrich_osquery(tag, timestamp, record)
             record["destination.port"] = tonumber(cols["remote_port"])
         end
 
-        -- container resolution через /proc/<pid>/cgroup → Docker short ID
-        local cid = get_docker_cid(cols["pid"])
+        -- container resolution: /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache
+        local cid = resolve_container_id(cols["pid"], cols["parent"])
         if cid then
             record["container.id"] = cid
             local meta = container_cache[cid]
