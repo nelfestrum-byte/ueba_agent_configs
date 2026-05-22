@@ -33,6 +33,17 @@ osquery_version:   "5.23.0"
 osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
 
 # =============================================================================
+# Версия конфигурации агентов (fluent-bit + Lua-скрипты)
+# =============================================================================
+#
+# Проставляется во все события как labels.config_version (ECS labels namespace).
+# Меняйте при любых правках fluent-bit.conf, auditd_enrich.lua, osquery_enrich.lua.
+# Формат: MAJOR.MINOR.PATCH — MAJOR при breaking changes схемы,
+#          MINOR при новых полях, PATCH при bugfix.
+#
+fluent_config_version: "1.0.0"
+
+# =============================================================================
 # URL репозиториев (используются только при use_local_packages: false)
 # =============================================================================
 #

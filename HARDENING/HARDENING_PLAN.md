@@ -17,11 +17,11 @@
 | --- | --- | --- | --- |
 | P0-01 | `process.entity_id` и `process.parent.entity_id` в Lua-enrich | ~1 час | — |
 | P0-02 | `user.session.id` — сквозной идентификатор сессии | ~2-3 часа | P0-01 (переиспользует `short_id()` и `btime`-кэш) |
-| P0-03 | Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`) | ~1 день | — |
+| ~~P0-03~~ | ~~Замена filebeat на fluent-bit SSH-pipeline (индекс `system-auth-*`)~~ — **УДАЛЕНО** (дублирует auditd) | ~1 день | — |
 | **P0-04** | **Auditd syscall rules: io_uring/ptrace/memfd_create/bpf/process_vm ✓ ВЫПОЛНЕНО 2026-05-22** | ~2-3 часа | учитывает P1-01 уточнения |
 | P1-01 | Gap-анализ audit.rules против Neo23x0 ruleset (Tier A + Tier B) | ~3-4 часа | — |
-| P1-02 | ECS Index Templates для OpenSearch (4 шаблона) | ~4 часа | после P0-01, P0-02, P0-03 |
-| P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | после P0-03 |
+| P1-02 | ECS Index Templates для OpenSearch (3 шаблона) | ~4 часа | после P0-01, P0-02 |
+| P1-03 | mTLS канал fluent-bit → Logstash | ~1 день | — |
 | P1-04 | `auditd-trigger.yml` — тестовый плейбук срабатываний правил | ~1 день | после P0-04, P1-01 |
 | **P2-01** | **osquery BPF backend + docker_containers + container.entity_id — фундамент поведенческой модели контейнеров ✓ ВЫПОЛНЕНО 2026-05-21** | ~1.5 дня | cross-task с P0-04 (whitelist) |
 | **P2-02** | **Расширение osquery-запросов (shell_history, process_envs, supply-chain и пр.) ✓ ВЫПОЛНЕНО 2026-05-21** | ~0.5 дня | опц. совмещать с P2-01 (.j2-template) |
@@ -140,16 +140,16 @@ user.session.id = FNV-1a(host.name + ":" + btime + ":" + ses)  →  16 hex си�
 
 ---
 
-## P0-03. Замена filebeat на fluent-bit SSH-pipeline
+## ~~P0-03. Замена filebeat на fluent-bit SSH-pipeline~~ — УДАЛЕНО
 
-**Приоритет:** P0 (высокий — целевой "clean fluent-bit" стек)
+**Приоритет:** ~~P0~~ — задача закрыта
 **Стоимость:** ~1 день
-**Статус:** баг — события приходят на Logstash TCP 5048, но не индексируются в OpenSearch (`system-auth-*`)
-**Зависимости:** —
-**Решения (зафиксированы):**
+**Статус:** **УДАЛЕНО 2026-05-22** — функция была реализована и работала, но удалена как дублирующая данные auditd (аутентификация, sudo, сессии полностью покрываются auditd-правилами). Отдельный SSH-пайплайн не даёт дополнительной ценности для UEBA-скоринга.
 
-- Индекс: **`system-auth-YYYY.MM.dd`** (нейтральное имя по содержимому: auth.log содержит не только sshd).
-- Filebeat: **удалить полностью** после миграции — purge пакета через ansible.
+**Последний коммит с работающей реализацией:** `960bdb2` (bugfix: ssh)
+**Коммит удаления:** `6aeaf16` (delete SSH) — удалены: `sshd_enrich.lua`, блок INPUT/OUTPUT в `fluent-bit.conf`, parser `syslog_sshd`, TCP 5048 в Logstash, `opensearch/templates/filebeat-auth.json`, `dev_stand/scripts/send-sshd.sh`.
+
+Для восстановления: `git show 960bdb2` покажет полное состояние всех файлов перед удалением.
 
 ### Зачем (P0-03)
 

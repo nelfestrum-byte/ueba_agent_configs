@@ -131,7 +131,8 @@
         },
         "labels": {
           "properties": {
-            "entity_id_source": { "type": "keyword" }
+            "entity_id_source": { "type": "keyword" },
+            "config_version":   { "type": "keyword" }
           }
         },
         "tags": { "type": "keyword" }
