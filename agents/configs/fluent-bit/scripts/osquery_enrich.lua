@@ -463,33 +463,35 @@ function enrich_osquery(tag, timestamp, record)
 
     -- ── ECS network ───────────────────────────────────────────────────────
     if query_name == "process_connections" then
-        if cols["remote_address"] and cols["remote_address"] ~= "" then
+        if cols["remote_address"] and cols["remote_address"] ~= "" and cols["remote_address"] ~= "0" then
             record["destination.ip"] = cols["remote_address"]
         end
         if cols["remote_port"] then
             record["destination.port"] = tonumber(cols["remote_port"])
         end
-        if cols["local_address"] and cols["local_address"] ~= "" then
+        if cols["local_address"] and cols["local_address"] ~= "" and cols["local_address"] ~= "0" then
             record["source.ip"] = cols["local_address"]
         end
         if cols["local_port"] then
             record["source.port"] = tonumber(cols["local_port"])
         end
         local proto = cols["protocol"]
-        if proto then
-            record["network.transport"]   = PROTO[proto] or proto
+        if proto and proto ~= "0" then
+            local proto_name = PROTO[proto]
+            if proto_name then record["network.transport"] = proto_name end
             record["network.iana_number"] = proto
         end
     end
 
     if query_name == "listening_ports" then
         if cols["port"]    then record["destination.port"] = tonumber(cols["port"]) end
-        if cols["address"] and cols["address"] ~= "" then
+        if cols["address"] and cols["address"] ~= "" and cols["address"] ~= "0" then
             record["destination.ip"] = cols["address"]
         end
         local proto = cols["protocol"]
-        if proto then
-            record["network.transport"]   = PROTO[proto] or proto
+        if proto and proto ~= "0" then
+            local proto_name = PROTO[proto]
+            if proto_name then record["network.transport"] = proto_name end
             record["network.iana_number"] = proto
         end
     end
@@ -560,28 +562,29 @@ function enrich_osquery(tag, timestamp, record)
             record["event.action"] = "socket_" .. syscall
         end
 
-        -- family: AF_INET=2 → ipv4, AF_INET6=10 → ipv6
+        -- family: только AF_INET=2 и AF_INET6=10 имеют смысл в ECS;
+        -- AF_NETLINK=16 и прочие — не устанавливаем network.type.
         local fam = cols["family"]
-        if fam then
-            if fam == "2"  then record["network.type"] = "ipv4"
-            elseif fam == "10" then record["network.type"] = "ipv6"
-            else record["network.type"] = fam end
+        if fam == "2"  then record["network.type"] = "ipv4"
+        elseif fam == "10" then record["network.type"] = "ipv6"
         end
 
-        -- protocol: IANA number → name через общую таблицу
+        -- protocol: IANA number → имя; сырое число в network.transport не пишем.
         local proto = cols["protocol"]
-        if proto then
-            record["network.transport"]   = PROTO[proto] or proto
+        if proto and proto ~= "0" then
+            local proto_name = PROTO[proto]
+            if proto_name then record["network.transport"] = proto_name end
             record["network.iana_number"] = proto
         end
 
-        if cols["local_address"]  and cols["local_address"] ~= "" then
+        -- "0" из BPF — unbound/any адрес, не валидный IP для OpenSearch.
+        if cols["local_address"]  and cols["local_address"] ~= "" and cols["local_address"] ~= "0" then
             record["source.ip"]   = cols["local_address"]
         end
         if cols["local_port"]     and cols["local_port"] ~= "" then
             record["source.port"] = tonumber(cols["local_port"])
         end
-        if cols["remote_address"] and cols["remote_address"] ~= "" then
+        if cols["remote_address"] and cols["remote_address"] ~= "" and cols["remote_address"] ~= "0" then
             record["destination.ip"]   = cols["remote_address"]
         end
         if cols["remote_port"]    and cols["remote_port"] ~= "" then
