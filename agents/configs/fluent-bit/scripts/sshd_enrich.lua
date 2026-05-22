@@ -165,6 +165,7 @@ function enrich_sshd(tag, timestamp, record)
     -- Remove parser artefacts not needed downstream
     record["program"]  = nil
     record["hostname"] = nil
+    record["pid"]      = nil   -- extracted to process.pid above
 
     return 2, timestamp, record
 end

@@ -1,0 +1,86 @@
+{
+  "index_patterns": ["system-auth-*"],
+  "priority": 200,
+  "_meta": {
+    "description": "UEBA SSH auth events — ECS 8.11 normalization via fluent-bit sshd_enrich.lua",
+    "source": "ueba-stand/opensearch/templates",
+    "version": "1.0"
+  },
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 1,
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "ecs": {
+          "properties": {
+            "version": { "type": "keyword" }
+          }
+        },
+        "event": {
+          "properties": {
+            "kind":     { "type": "keyword" },
+            "dataset":  { "type": "keyword" },
+            "module":   { "type": "keyword" },
+            "category": { "type": "keyword" },
+            "type":     { "type": "keyword" },
+            "action":   { "type": "keyword" },
+            "outcome":  { "type": "keyword" }
+          }
+        },
+        "host": {
+          "properties": {
+            "name": { "type": "keyword" },
+            "os": {
+              "properties": {
+                "type":   { "type": "keyword" },
+                "family": { "type": "keyword" }
+              }
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "pid":  { "type": "integer" },
+            "name": { "type": "keyword" }
+          }
+        },
+        "user": {
+          "properties": {
+            "id":   { "type": "keyword" },
+            "name": { "type": "keyword" }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip":      { "type": "ip" },
+            "port":    { "type": "integer" },
+            "address": { "type": "keyword" }
+          }
+        },
+        "related": {
+          "properties": {
+            "user": { "type": "keyword" },
+            "ip":   { "type": "ip" }
+          }
+        },
+        "tags": { "type": "keyword" }
+      }
+    }
+  }
+}

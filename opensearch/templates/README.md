@@ -9,10 +9,8 @@
 |------|---------------|-----------|----------|
 | `fluent-audit.json` | `fluent-audit-*` | 200 | auditd события: execve, network, file, auth |
 | `fluent-osquery.json` | `fluent-osquery-*` | 200 | osquery diff-события + `osquery.*` namespace |
-| `filebeat-auth.json` | `filebeat-*` | 50 | SSH auth.log (временный компонент) |
-
-> **filebeat**: приоритет 50 намеренно ниже auto-шаблона filebeat (100).
-> Шаблон из этого репозитория применится только если filebeat ещё не запускался на стенде.
+| `system-auth.json` | `system-auth-*` | 200 | SSH auth события из journald via sshd_enrich.lua |
+| `filebeat-auth.json` | `filebeat-*` | 50 | устаревший (filebeat удалён, заменён system-auth) |
 
 ---
 
@@ -25,7 +23,7 @@ BASE="https://opensearch.host:9200"
 CREDS="admin:your_password"      # заменить
 CACERT="--cacert /path/to/opensearch-ca.pem"   # или -k для dev
 
-for name in fluent-audit fluent-osquery filebeat-auth; do
+for name in fluent-audit fluent-osquery system-auth; do
   echo "→ $name"
   curl -s -u "$CREDS" $CACERT \
     -X PUT "$BASE/_index_template/$name" \
@@ -41,7 +39,7 @@ $BASE    = "https://opensearch.host:9200"
 $CREDS   = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:your_password"))
 $Headers = @{ Authorization = "Basic $CREDS"; "Content-Type" = "application/json" }
 
-foreach ($name in "fluent-audit", "fluent-osquery", "filebeat-auth") {
+foreach ($name in "fluent-audit", "fluent-osquery", "system-auth") {
     $body = Get-Content -Raw "$PSScriptRoot\$name.json"
     $resp = Invoke-RestMethod -Method Put `
         -Uri "$BASE/_index_template/$name" `
@@ -59,7 +57,7 @@ foreach ($name in "fluent-audit", "fluent-osquery", "filebeat-auth") {
 
 ```bash
 # Список всех UEBA-шаблонов:
-curl -s -u "$CREDS" "$BASE/_cat/templates?v&name=fluent-*,filebeat-*"
+curl -s -u "$CREDS" "$BASE/_cat/templates?v&name=fluent-*,system-auth*"
 
 # Полный шаблон:
 curl -s -u "$CREDS" "$BASE/_index_template/fluent-audit" | python3 -m json.tool

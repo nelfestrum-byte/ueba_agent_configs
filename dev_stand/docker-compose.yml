@@ -100,6 +100,7 @@ services:
       - "5044:5044"   # beats relay
       - "5045:5045"   # fluent-bit: auditd TCP
       - "5047:5047"   # fluent-bit: osquery TCP
+      - "5048:5048"   # fluent-bit: system-auth TCP
     networks:
       - ueba-net
     healthcheck:
