@@ -27,6 +27,17 @@ local SYSCALLS = {
     ["101"]="ptrace",          ["310"]="process_vm_readv",
     ["311"]="process_vm_writev",["319"]="memfd_create",
     ["321"]="bpf",             ["425"]="io_uring_setup",
+    -- P1-01 Tier A: anti-forensics, persistence, container escape, exploit primitives
+    ["133"]="mknod",        ["155"]="pivot_root",   ["163"]="acct",
+    ["165"]="mount",        ["166"]="umount2",      ["167"]="swapon",
+    ["168"]="swapoff",      ["169"]="reboot",       ["235"]="utimes",
+    ["246"]="kexec_load",   ["259"]="mknodat",      ["261"]="futimesat",
+    ["272"]="unshare",      ["280"]="utimensat",    ["282"]="userfaultfd",
+    ["308"]="setns",        ["320"]="kexec_file_load",
+    ["428"]="open_tree",    ["429"]="move_mount",   ["430"]="fsopen",
+    ["431"]="fsconfig",     ["432"]="fsmount",
+    -- P1-01 Tier B: network/DNS, special files
+    ["170"]="sethostname",  ["171"]="setdomainname",
 }
 
 -- ── ECS event.category по типу auditd-события ──
@@ -268,6 +279,39 @@ function enrich_ecs(tag, timestamp, record)
         elseif sc_name == "io_uring_setup" then
             record["event.type"]     = "info"
             record["event.category"] = "process"
+        -- P1-01 Tier A
+        elseif sc_name == "mount"      or sc_name == "umount2"
+            or sc_name == "move_mount" or sc_name == "open_tree"
+            or sc_name == "fsopen"     or sc_name == "fsconfig"
+            or sc_name == "fsmount" then
+            record["event.type"]     = "change"
+            record["event.category"] = "host"
+        elseif sc_name == "unshare" or sc_name == "setns"
+            or sc_name == "pivot_root" then
+            record["event.type"]     = "change"
+            record["event.category"] = "process"
+        elseif sc_name == "reboot"   or sc_name == "kexec_load"
+            or sc_name == "kexec_file_load" then
+            record["event.type"]     = "change"
+            record["event.category"] = "host"
+        elseif sc_name == "acct"   or sc_name == "swapon"
+            or sc_name == "swapoff" then
+            record["event.type"]     = "change"
+            record["event.category"] = "host"
+        elseif sc_name == "utimensat" or sc_name == "utimes"
+            or sc_name == "futimesat" then
+            record["event.type"]     = "change"
+            record["event.category"] = "file"
+        elseif sc_name == "userfaultfd" then
+            record["event.type"]     = "info"
+            record["event.category"] = "process"
+        -- P1-01 Tier B
+        elseif sc_name == "mknod" or sc_name == "mknodat" then
+            record["event.type"]     = "creation"
+            record["event.category"] = "file"
+        elseif sc_name == "sethostname" or sc_name == "setdomainname" then
+            record["event.type"]     = "change"
+            record["event.category"] = "host"
         end
 
         --[[
