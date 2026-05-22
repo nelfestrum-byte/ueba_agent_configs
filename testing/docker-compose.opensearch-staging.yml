@@ -1,0 +1,87 @@
+version: '3.7'
+
+# UEBA Staging Stand — OpenSearch + Dashboards (HTTP, security disabled)
+#
+# Запуск:
+#   cd testing && docker compose -f docker-compose.opensearch-staging.yml up -d
+#
+# Переключить Logstash на staging:
+#   На хосте Logstash: в .env выставить OPENSEARCH_URL=http://<staging-ip>:9200
+#   затем перезапустить контейнер Logstash.
+#
+# Шаблоны индексов применяются автоматически сервисом templates-init.
+# После того как данные пошли — запустить валидацию:
+#   python3 validate_ueba.py --url http://localhost:9200
+
+services:
+
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: ueba-opensearch-staging
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      # single-node: реплики не нужны (иначе индексы будут yellow)
+      - "action.auto_create_index=true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.0
+    container_name: ueba-dashboards-staging
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  # Применяет index templates (fluent-audit, fluent-osquery) после старта OS.
+  # Завершается с кодом 0 после применения — docker не перезапускает.
+  templates-init:
+    image: curlimages/curl:8.7.1
+    container_name: ueba-templates-init
+    volumes:
+      - ../opensearch/templates:/templates:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: "no"
+    command: >
+      sh -c "
+        echo '=== Applying UEBA index templates ===';
+        for t in fluent-audit fluent-osquery; do
+          echo '  --> '$t;
+          curl -sf -X PUT http://opensearch:9200/_index_template/$$t
+            -H 'Content-Type: application/json'
+            --data-binary @/templates/$$t.json
+            && echo '  OK' || echo '  FAILED';
+        done;
+        echo '--- Setting single-node defaults (replicas=0) ---';
+        curl -sf -X PUT http://opensearch:9200/_template/single-node-defaults
+          -H 'Content-Type: application/json'
+          -d '{\"index_patterns\":[\"fluent-*\"],\"priority\":1,\"template\":{\"settings\":{\"number_of_replicas\":0}}}'
+          && echo ' OK' || true;
+        echo 'Done.';
+      "
+
+volumes:
+  opensearch-data:
