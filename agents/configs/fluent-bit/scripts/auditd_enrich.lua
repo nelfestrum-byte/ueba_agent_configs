@@ -110,6 +110,21 @@ local function decode_saddr(saddr)
     return nil, nil, nil
 end
 
+-- Декодирует hex-строку auditd в обычный текст.
+-- auditd hex-кодирует exe когда путь содержит пробелы, (deleted) или non-ASCII.
+-- Возвращает исходную строку если она не является валидным hex.
+local function decode_hex_str(s)
+    if not s or #s == 0 or #s % 2 ~= 0 then return s end
+    if not s:match("^[0-9A-Fa-f]+$") then return s end
+    local result = s:gsub("%x%x", function(h)
+        return string.char(tonumber(h, 16))
+    end)
+    if result:sub(1,1) == "/" or result:sub(1,7) == "memfd::" then
+        return result
+    end
+    return s
+end
+
 -- ── Конвертация Unix mode в строку (rwxr-xr-x) ──
 local function mode_to_str(mode_oct)
     if not mode_oct then return nil end
@@ -168,7 +183,7 @@ function enrich_ecs(tag, timestamp, record)
         record["process.pid"]          = pid
         record["process.name"]         = record["comm"]
         if record["comm"] then common.cache_put_name(pid, record["comm"]) end
-        record["process.executable"]   = record["exe"]
+        record["process.executable"]   = decode_hex_str(record["exe"])
         record["process.title"]        = record["proctitle"]
         record["process.command_line"] = record["proctitle"]
 
@@ -360,7 +375,7 @@ function enrich_ecs(tag, timestamp, record)
 
         if u_uid  and u_uid  ~= "" then record["user.id"]            = u_uid  end
         if u_name and u_name ~= "" then record["user.name"]          = u_name end
-        if u_exe  and u_exe  ~= "" then record["process.executable"] = u_exe  end
+        if u_exe  and u_exe  ~= "" then record["process.executable"] = decode_hex_str(u_exe)  end
         if u_pid                   then record["process.pid"]         = u_pid  end
 
         -- collect keys to delete first, then delete (safe iteration)
