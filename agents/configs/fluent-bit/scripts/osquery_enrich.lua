@@ -617,9 +617,30 @@ function enrich_osquery(tag, timestamp, record)
         if cols["path"]      and cols["path"] ~= "" then
             record["process.executable"] = cols["path"]
         end
+
+        -- process.command_line из osquery BPF tap.
+        -- osquery BPF probe (sched_process_exec) подвержен race condition
+        -- (github.com/osquery/osquery/issues/7497): при коротких процессах
+        -- argv копируется только частично, остаётся argv[0].
+        -- Детектируем truncation и помечаем флагом для downstream UEBA:
+        -- если cmdline без пробелов И равен basename(path) — это с большой
+        -- вероятностью обрезанный argv (UEBA-коррелятор должен учитывать
+        -- этот флаг как сигнал НЕОПРЕДЕЛЁННОСТИ, а не повышать score за
+        -- "cat" без аргументов).
         if cols["cmdline"]   and cols["cmdline"] ~= "" then
             record["process.command_line"] = cols["cmdline"]
+
+            local exe = cols["path"] or ""
+            local base = exe:match("([^/]+)$") or exe
+            if base ~= "" and cols["cmdline"] == base
+               and not cols["cmdline"]:find(" ", 1, true) then
+                record["labels.cmdline_truncated"] = "argv0_only"
+            end
         end
+
+        -- Источник cmdline для downstream корреляции с auditd execve.
+        record["labels.cmdline_source"] = "osquery_bpf"
+
         if cols["uid"]       and cols["uid"] ~= "" then record["user.id"]        = cols["uid"] end
         if cols["gid"]       and cols["gid"] ~= "" then record["user.group.id"]  = cols["gid"] end
         if cols["exit_code"] and cols["exit_code"] ~= "" then

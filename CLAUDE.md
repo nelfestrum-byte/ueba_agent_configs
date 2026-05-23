@@ -246,6 +246,14 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 **AF_UNIX/AF_NETLINK/AF_PACKET в bpf_sockets (QA-03):** для non-IP families enrich override'ит `event.category` из `network` (QUERY_META default) в `process`. Заполнение ECS `network.*` полей пропускается (нет IP/port). `event.action=socket_<syscall>_nonip` (отдельно от `socket_<syscall>` для AF_INET/AF_INET6).
 
+**bpf_process_events argv truncation (QA-FIX-11):** osquery BPF probe `sched_process_exec` копирует argv через `bpf_probe_read_user_str()` в фиксированный buffer; при короткоживущих процессах и context switch копирование прерывается после `argv[0]` (см. [osquery#7497](https://github.com/osquery/osquery/issues/7497)). Это **race на стороне osquery**, не на нашей.
+
+Эвристика в `osquery_enrich.lua` блок `bpf_processes`: если `cmdline` не содержит пробелов И равен `basename(path)` → `labels.cmdline_truncated = "argv0_only"`. Помимо этого все `bpf_process_events` маркируются `labels.cmdline_source = "osquery_bpf"` для downstream корреляции с `auditd execve` (там `labels.cmdline_source` не ставится).
+
+**Контракт для UEBA-коррелятора:** при `labels.cmdline_truncated = "argv0_only"` поле `process.command_line` — **сигнал неопределённости**, не повышать score за «процесс без аргументов» (например, одинокий `cat` в контейнере). Для полной картины — JOIN с `fluent-audit-*` execve по `host.name + process.pid + @timestamp±2s` (auditd execve пишет полный argv).
+
+Эвристика **не** ловит false negative: argv[0]-rename (`bash` запущен как `-bash` для login shell), partial truncation (`cat /etc/`). Эвристика **не false-positive** для legitimate single-arg запусков (`pwd`, `date`, `hostname`) — для UEBA одинокие `pwd`/`date` тоже не несут информации.
+
 ### Профили osquery и shell_history (P2-02)
 
 **Профильная переменная:** `osquery_profile` в `agents/deploy/group_vars/all.yml` (default: `server`). Переопределяется через `group_vars/workstations.yml` (`workstation`).

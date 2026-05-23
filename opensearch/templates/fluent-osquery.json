@@ -200,8 +200,11 @@
         },
         "labels": {
           "properties": {
-            "entity_id_source": { "type": "keyword" },
-            "config_version":   { "type": "keyword" }
+            "entity_id_source":  { "type": "keyword" },
+            "config_version":    { "type": "keyword" },
+            "cmdline_truncated": { "type": "keyword" },
+            "cmdline_source":    { "type": "keyword" },
+            "transport_inferred":{ "type": "keyword" }
           }
         },
         "tags": { "type": "keyword" }
