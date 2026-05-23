@@ -12,6 +12,7 @@ local SYSCALLS = {
     ["6"]="lstat",       ["9"]="mmap",        ["11"]="munmap",
     ["21"]="access",     ["32"]="dup",        ["33"]="dup2",
     ["41"]="socket",     ["42"]="connect",    ["43"]="accept",
+    ["44"]="sendto",     ["46"]="sendmsg",
     ["49"]="bind",       ["50"]="listen",     ["54"]="setsockopt",
     ["56"]="clone",      ["57"]="fork",       ["58"]="vfork",
     ["59"]="execve",     ["60"]="exit",       ["61"]="wait4",
@@ -19,7 +20,8 @@ local SYSCALLS = {
     ["85"]="creat",      ["86"]="link",       ["87"]="unlink",
     ["88"]="symlink",    ["90"]="chmod",      ["92"]="chown",
     ["94"]="lchown",     ["105"]="setuid",    ["106"]="setgid",
-    ["113"]="setreuid",  ["117"]="setresuid", ["132"]="utime",
+    ["113"]="setreuid",  ["117"]="setresuid",
+    ["119"]="setresgid", ["126"]="setregid",  ["132"]="utime",
     ["257"]="openat",    ["258"]="mkdirat",   ["263"]="unlinkat",
     ["265"]="linkat",    ["266"]="symlinkat", ["288"]="accept4",
     ["316"]="renameat2", ["322"]="execveat",
@@ -259,9 +261,22 @@ function enrich_ecs(tag, timestamp, record)
     end
 
     -- user.name = имя вызывающего процесса (uid_name, соответствует user.id/uid).
-    -- Устанавливаем ДО очистки uid_name.
+    -- Устанавливаем ДО финальной очистки uid_name (в конце enrich).
     if record["uid_name"] and record["uid_name"] ~= "" then
         record["user.name"] = record["uid_name"]
+    end
+
+    -- Fallback для USER_*/CRED_* событий (QA-FIX-10): ядро не пишет uid=
+    -- в эти сообщения, только acct= (целевой) и auid= (запросивший).
+    -- Берём в порядке предпочтения: запросивший пользователь (auid_name) →
+    -- имя целевой учётки (user_acct/cred_*_acct).
+    -- Закрывает 100% missing user.name в category=authentication.
+    if not record["user.name"] or record["user.name"] == "" then
+        record["user.name"] = record["auid_name"]
+                           or record["user_acct"]
+                           or record["cred_disp_acct"]
+                           or record["cred_refr_acct"]
+                           or record["cred_acq_acct"]
     end
 
     -- user.target.name = целевая учётная запись PAM/sudo (acct-поле auditd).
@@ -269,9 +284,7 @@ function enrich_ecs(tag, timestamp, record)
     if record["user_acct"] and record["user_acct"] ~= "" then
         record["user.target.name"] = record["user_acct"]
     end
-
-    record["uid_name"]  = nil
-    record["auid_name"] = nil
+    -- uid_name / auid_name удаляются в финальном блоке (после fallback'ов).
 
     -- ── Syscall ──
     local sc_num  = record["syscall"]
@@ -293,6 +306,11 @@ function enrich_ecs(tag, timestamp, record)
                sc_name == "accept"  or sc_name == "accept4" then
             record["event.type"]     = "start"
             record["event.category"] = "network"
+        elseif sc_name == "sendto" or sc_name == "sendmsg" then
+            -- Если есть SOCKADDR — блок ниже переключит на конкретный network.type;
+            -- иначе остаёмся в network.
+            record["event.type"]     = "info"
+            record["event.category"] = "network"
         elseif sc_name == "open" or sc_name == "openat" or sc_name == "creat" then
             record["event.type"]     = "access"
             record["event.category"] = "file"
@@ -302,8 +320,9 @@ function enrich_ecs(tag, timestamp, record)
         elseif sc_name == "mkdir" or sc_name == "mkdirat" then
             record["event.type"]     = "creation"
             record["event.category"] = "file"
-        elseif sc_name == "setuid" or sc_name == "setreuid" or
-               sc_name == "setresuid" then
+        elseif sc_name == "setuid"    or sc_name == "setreuid"  or
+               sc_name == "setresuid" or sc_name == "setgid"    or
+               sc_name == "setregid"  or sc_name == "setresgid" then
             record["event.type"]     = "change"
             record["event.category"] = "iam"
         -- P0-04: modern bypass vectors
@@ -508,7 +527,13 @@ function enrich_ecs(tag, timestamp, record)
     end
 
     -- ── Результат события ──
-    local success = record["syscall_success"] or record["user_res"]
+    -- QA-FIX-10: CRED_DISP/CRED_REFR/CRED_ACQ мержатся с префиксом cred_*_,
+    -- поэтому res= лежит в cred_disp_res / cred_refr_res / cred_acq_res.
+    local success = record["syscall_success"]
+                 or record["user_res"]
+                 or record["cred_disp_res"]
+                 or record["cred_refr_res"]
+                 or record["cred_acq_res"]
     if success then
         -- strip trailing control chars (auditd appends GS 0x1D to PAM fields)
         success = success:match("^([%a]+)") or success
@@ -517,9 +542,14 @@ function enrich_ecs(tag, timestamp, record)
     end
 
     -- ── Сессия auditd ──
-    -- USER_* события мержатся с префиксом user_* (merge.lua:122-126),
+    -- USER_* события мержатся с префиксом user_* (merge.lua:127-131),
     -- поэтому ses из USER_LOGIN/USER_AUTH/USER_LOGOUT лежит в user_ses.
-    local ses = tonumber(record["ses"] or record["user_ses"])
+    -- QA-FIX-10: CRED_* идут через else-ветку merge.lua → cred_*_ses.
+    local ses = tonumber(record["ses"]
+                      or record["user_ses"]
+                      or record["cred_disp_ses"]
+                      or record["cred_refr_ses"]
+                      or record["cred_acq_ses"])
     if ses and ses > 0 and ses ~= 4294967295 then
         record["auditd.session"] = ses
         local sid = common.make_session_id(record["host.name"] or "", ses)
@@ -537,8 +567,11 @@ function enrich_ecs(tag, timestamp, record)
     record["syscall_exit"]     = nil
 
     -- user_*/cred_*/service_*_* поля чистим В САМОМ КОНЦЕ — после того как
-    -- event.outcome (user_res / service_*_res) и auditd.session (user_ses)
-    -- уже считаны. Очистка раньше = пустой outcome/session.
+    -- event.outcome (user_res / cred_*_res / service_*_res) и
+    -- auditd.session (user_ses / cred_*_ses) уже считаны. Очистка раньше =
+    -- пустой outcome/session. user.name fallback (QA-FIX-10) тоже выше.
+    record["uid_name"]  = nil
+    record["auid_name"] = nil
     local to_del = {}
     for k in pairs(record) do
         if k:sub(1, 5)  == "user_"

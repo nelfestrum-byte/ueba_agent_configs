@@ -265,11 +265,25 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 На хостах с включённым BPF backend (`[docker_hosts]`) osqueryd триггерит это правило при загрузке BPF-программ → feedback loop. **Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`** — отдельный коммит.
 
-### `USER_*` / `SERVICE_*`: очистка raw-полей в самом конце enrich (QA-02)
+### `USER_*` / `CRED_*` / `SERVICE_*`: очистка raw-полей в самом конце enrich (QA-02 / QA-FIX-10)
 
-`auditd_enrich.lua` хранит merge-поля `USER_*`/`CRED_*`/`SERVICE_*` с префиксом источника (`user_res`, `user_ses`, `cred_disp_acct`, `service_start_msg`, ...). Очистка этих полей должна выполняться **в самом конце** функции `enrich_ecs`, **после** блоков «Результат события» (читает `user_res`/`service_*_res` → `event.outcome`) и «Сессия auditd» (читает `user_ses` → `auditd.session`).
+`auditd_enrich.lua` хранит merge-поля `USER_*`/`CRED_*`/`SERVICE_*` с префиксом источника (`user_res`, `user_ses`, `cred_disp_acct`, `cred_refr_res`, `cred_acq_ses`, `service_start_msg`, ...). Очистка этих полей должна выполняться **в самом конце** функции `enrich_ecs`, **после** блоков «Результат события» (читает `user_res`/`cred_*_res`/`service_*_res` → `event.outcome`), «Сессия auditd» (читает `user_ses`/`cred_*_ses` → `auditd.session`) и **fallback'ов `user.name`** (читает `auid_name`/`user_acct`/`cred_*_acct`).
 
-**Грабли (QA-01 → QA-02):** ранее очистка стояла внутри блока `USER_*` и удаляла `user_res`/`user_ses` до того, как они читались → `event.outcome` и `auditd.session` отсутствовали в 100% authentication-событий. Если двигаешь блоки или добавляешь новый источник с префиксом — убедись, что финальный cleanup идёт последним.
+QA-FIX-10 расширил список raw-полей в финальном cleanup: помимо `user_*`/`service_*_*` теперь снимаются `cred_disp_*`, `cred_refr_*`, `cred_acq_*`, а также `uid_name`/`auid_name` (раньше удалялись сразу в блоке «Пользователь» — теперь нужны для fallback'а).
+
+**Грабли (QA-01 → QA-02):** ранее очистка стояла внутри блока `USER_*` и удаляла `user_res`/`user_ses` до того, как они читались → `event.outcome` и `auditd.session` отсутствовали в 100% authentication-событий.
+
+**Грабли (QA-01 v4 → QA-FIX-10):** CRED_DISP/CRED_REFR/CRED_ACQ — это самостоятельные audit-типы (не `USER_*`), `auditd_merge.lua` мержит их через else-ветку → префикс `cred_disp_`/`cred_refr_`/`cred_acq_`. Блоки `event.outcome` и `auditd.session` читали только `user_*` → 207 cred_disp/refr/acq событий теряли outcome+session. Если добавляешь новый audit-тип, не подпадающий под `^USER_` — учти, что в `entry[type:lower() .. "_" .. k] = v` префикс будет в нижнем регистре с подчёркиванием, и его нужно явно добавить во все читающие блоки + cleanup-loop. Если двигаешь блоки или добавляешь новый источник с префиксом — убедись, что финальный cleanup идёт последним.
+
+### `user.name` fallback для USER_*/CRED_* (QA-FIX-10)
+
+Ядро auditd **не пишет** `uid=`/`UID=` (kernel-resolved `uid_name`) в сообщения PAM-категорий `USER_ACCT`/`USER_START`/`USER_END`/`USER_LOGIN`/`USER_CMD`/`CRED_DISP`/`CRED_REFR`/`CRED_ACQ` — только `acct=` (целевая учётка) и `auid=` + `AUID=` (запросивший). Поэтому в блоке «Пользователь» добавлена fallback-цепочка для `user.name`:
+
+```
+uid_name  →  auid_name  →  user_acct  →  cred_disp_acct  →  cred_refr_acct  →  cred_acq_acct
+```
+
+Логика: «запросивший пользователь» (`auid_name`) более информативен для UEBA-скоринга чем «целевой» (`acct`); если ни тот, ни другой не известны — берём имя целевой учётки как минимум. Закрывает 100% missing `user.name` в `event.category=authentication`. **`user.target.name`** при этом всегда равно `user_acct` (если есть) — sudo-семантика (`installer` → `user.name`, `root` → `user.target.name`).
 
 ### process.args порядок — собирать по индексу `argc`, не через pairs() (QA-02)
 

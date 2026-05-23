@@ -108,7 +108,7 @@ auditd перехватывает системные вызовы на уров�
 | `process.working_directory` | keyword | при CWD | рабочая директория |
 | `labels.entity_id_source` | keyword | при fallback | `event_timestamp_fallback` — процесс исчез из `/proc` до enrich (exit-событие короткоживущего); entity_id такого события **не совпадёт** с osquery. |
 | `user.id` | keyword | всегда | UID процесса (uid из auditd) |
-| `user.name` | keyword | если известен | Имя пользователя, соответствующее `user.id` (из поля auditd `uid_name`). Для PAM/sudo событий — имя вызывающего процесса, **не** target. |
+| `user.name` | keyword | если известен | Имя пользователя, соответствующее `user.id` (из поля auditd `uid_name`). Для PAM/sudo событий — имя вызывающего процесса, **не** target. Fallback-цепочка (QA-FIX-10) для `USER_*`/`CRED_*` событий, где ядро не пишет `uid=`: `uid_name → auid_name → user_acct → cred_disp_acct → cred_refr_acct → cred_acq_acct`. |
 | `user.target.name` | keyword | при PAM/sudo | Целевая учётная запись (`acct` / `user_acct` / `cred_*_acct` поле auditd). `"root"` при `sudo`, имя пользователя при прямом логине. |
 | `user.effective.id` | keyword | если auid ≠ -1 | Login UID (auid) — реальный пользователь до sudo. При `sudo cmd` process uid=0, auid = залогинившийся. |
 | `user.effective.name` | keyword | если известен | имя login-пользователя |
