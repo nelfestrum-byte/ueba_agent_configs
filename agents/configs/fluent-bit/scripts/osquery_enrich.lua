@@ -647,14 +647,26 @@ function enrich_osquery(tag, timestamp, record)
             record["process.exit_code"] = normalize_int64(cols["exit_code"])
         end
 
-        -- process.entity_id — seed: host:pid:ntime (kernel monotonic ns).
-        -- ntime ≠ epoch seconds, поэтому cache_put не вызываем (не смешиваем
-        -- с epoch-based кэшем из таблицы processes / auditd_enrich).
-        if cols["pid"] and cols["ntime"] and cols["ntime"] ~= "" then
-            local seed = (record["host.name"] or "")
-                      .. ":" .. cols["pid"]
-                      .. ":" .. cols["ntime"]
-            record["process.entity_id"] = common.short_id(seed)
+        -- process.entity_id — выровнено с auditd_enrich, osquery/processes и
+        -- bpf_socket_events: seed = host:pid:epoch_start_time через
+        -- /proc/<pid>/stat. Кросс-индекс JOIN audit↔bpf_process_events по
+        -- host.name + process.entity_id корректен для живых процессов.
+        -- Для короткоживущих процессов /proc/<pid>/stat уже недоступен —
+        -- entity_id НЕ ставим (лучше пусто, чем mismatch). Маркируем
+        -- labels.entity_id_source="bpf_proc_short_lived" чтобы UEBA-коррелятор
+        -- знал использовать host.name+pid+@timestamp±2s как fallback.
+        -- osquery.ntime остаётся в индексе как сырое поле для отладки.
+        local bpf_pid = tonumber(cols["pid"])
+        if bpf_pid and bpf_pid > 0 then
+            local start_ts = common.resolve_start(bpf_pid)
+            if start_ts then
+                local seed = (record["host.name"] or "")
+                          .. ":" .. tostring(bpf_pid)
+                          .. ":" .. tostring(start_ts)
+                record["process.entity_id"] = common.short_id(seed)
+            else
+                record["labels.entity_id_source"] = "bpf_proc_short_lived"
+            end
         end
 
         -- container resolution:

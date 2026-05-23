@@ -102,7 +102,7 @@ ueba-stand/
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd + osquery pipelines |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id`; обработчики USER_*/CRED_*/SERVICE_START/SERVICE_STOP и реклассификация AF_UNIX/AF_NETLINK/AF_PACKET сокетов (QA-02) |
-| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd; QA-03: `cgroup_ns_cache` (osquery.cid → container.id) + AF_NETLINK/AF_UNIX → category=process + `normalize_int64` для BPF exit_code + `uid_to_name` для kernel_keys + `container_observed_*` action |
+| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd во всех источниках включая `bpf_process_events` (QA-FIX-12: epoch start_time из `/proc/<pid>/stat` вместо kernel monotonic ntime); QA-03: `cgroup_ns_cache` (osquery.cid → container.id) + AF_NETLINK/AF_UNIX → category=process + `normalize_int64` для BPF exit_code + `uid_to_name` для kernel_keys + `container_observed_*` action |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb, osquery_profile |
@@ -220,6 +220,8 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ### exit-события короткоживущих процессов
 Если процесс завершился до того, как enrich обработал его exit-событие, `/proc/<pid>/stat` уже недоступен и кэша нет → `start_time` берётся из `@timestamp` события. Поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует об этом. `process.entity_id` такого события **не совпадёт** с osquery — это known limitation.
+
+В osquery `bpf_process_events` (QA-FIX-12) аналогичный сценарий обрабатывается строже: для коротких процессов, чьи `/proc/<pid>/stat` недоступны, `process.entity_id` **не ставится вообще** + добавляется `labels.entity_id_source = "bpf_proc_short_lived"`. Это сознательный отказ от fallback'а на `@timestamp` (как в auditd), чтобы не создавать неверный hash, не совпадающий ни с auditd execve, ни с osquery/processes. UEBA-коррелятор для таких документов должен использовать `host.name + process.pid + @timestamp±2s`.
 
 ### osquery BPF backend — матрица групп и whitelist для bpf-правила
 

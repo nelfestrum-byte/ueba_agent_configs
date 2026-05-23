@@ -106,7 +106,7 @@ auditd перехватывает системные вызовы на уров�
 | `process.args` | keyword[] | при execve | Аргументы execve как массив, **в порядке индекса** (`process.args[0]` = базовое имя процесса, `args[1..N-1]` = передаваемые аргументы). Например, для `sleep 10`: `["sleep","10"]`. Источник — EXECVE-запись auditd (поля `a0..a<argc-1>`), длина определяется по `argc`. |
 | `process.args_count` | integer | при execve | количество аргументов |
 | `process.working_directory` | keyword | при CWD | рабочая директория |
-| `labels.entity_id_source` | keyword | при fallback | `event_timestamp_fallback` — процесс исчез из `/proc` до enrich (exit-событие короткоживущего); entity_id такого события **не совпадёт** с osquery. |
+| `labels.entity_id_source` | keyword | при fallback | `event_timestamp_fallback` — процесс исчез из `/proc` до enrich (exit-событие короткоживущего); entity_id такого события **не совпадёт** с osquery. `bpf_proc_short_lived` (только в `fluent-osquery-*`, см. раздел 4) — `bpf_processes`: `/proc/<pid>/stat` недоступен, entity_id **не установлен**. |
 | `user.id` | keyword | всегда | UID процесса (uid из auditd) |
 | `user.name` | keyword | если известен | Имя пользователя, соответствующее `user.id` (из поля auditd `uid_name`). Для PAM/sudo событий — имя вызывающего процесса, **не** target. Fallback-цепочка (QA-FIX-10) для `USER_*`/`CRED_*` событий, где ядро не пишет `uid=`: `uid_name → auid_name → user_acct → cred_disp_acct → cred_refr_acct → cred_acq_acct`. |
 | `user.target.name` | keyword | при PAM/sudo | Целевая учётная запись (`acct` / `user_acct` / `cred_*_acct` поле auditd). `"root"` при `sudo`, имя пользователя при прямом логине. |
@@ -585,7 +585,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
   3. `/proc/<ppid>/cgroup` — для exit-событий, если родитель жив.
   4. `pid_cid_cache[ppid]` — parent chain fallback.
 - `container.name`, `container.image.name`, `container.entity_id` — резолвятся из `container_cache` по `container.id`. Кэш заполняется из `docker_containers` событий. **Если fluent-bit перезапущен** — первые BPF-события после рестарта не получат container-атрибуцию до прихода первого `docker_containers` diff (≤30 сек): оба кэша (`container_cache` и `cgroup_ns_cache`) теряются при рестарте.
-- `process.entity_id`: FNV-1a(host.name:pid:ntime) — ntime является kernel monotonic nanoseconds, поэтому **НЕ совпадает** с auditd/processes (те используют epoch seconds). Known limitation до унификации через P0-01.
+- `process.entity_id`: epoch-based seed `FNV-1a(host.name:pid:start_time)`, где `start_time` берётся из `/proc/<pid>/stat` (та же формула, что в auditd_enrich и osquery/processes/bpf_sockets — QA-FIX-12). **Совпадает** с auditd execve и osquery/processes для живых процессов → cross-index JOIN по `host.name + process.entity_id` корректен. Для короткоживущих процессов, чьи `/proc/<pid>/stat` уже недоступны, entity_id **не ставится**, добавляется `labels.entity_id_source = "bpf_proc_short_lived"`. `osquery.ntime` (kernel monotonic ns) остаётся в индексе как сырое поле для отладки, в seed больше не используется.
 - `labels.cmdline_source: "osquery_bpf"` — ставится во всех `bpf_process_events`. Позволяет downstream UEBA-коррелятору отличить cmdline из osquery BPF (potentially truncated) от cmdline из auditd execve (полный argv).
 - `labels.cmdline_truncated: "argv0_only"` — эвристический флаг truncation: `cmdline` без пробелов И равен `basename(path)`. Корневая причина — race в osquery BPF probe `sched_process_exec` ([osquery#7497](https://github.com/osquery/osquery/issues/7497)): для короткоживущих процессов argv копируется только частично, остаётся `argv[0]`. **UEBA-контракт**: при наличии флага не повышать score за «процесс без аргументов» (`cat`/`ls`/`sh` без args) — это сигнал НЕОПРЕДЕЛЁННОСТИ, реальный argv доступен в `fluent-audit-*` execve по `host.name + process.pid + @timestamp±2s`. Эвристика **не** ловит argv[0]-rename (`-bash` для login shell) и partial truncation (`cat /etc/`); **не** false-positive для legitimate single-arg (`pwd`, `date`).
 - **UEBA**: event-driven (без polling gap); container-aware видимость через `/proc/<pid>/cgroup` lookup
@@ -633,8 +633,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | Реальный пользователь (до sudo) | `user.effective.id` | auditd (auid — login UID, сохраняется через sudo) |
 | Хост | `host.name` | все источники |
 | Сессия пользователя | `user.session.id` | auditd, osquery (processes/connections/files/logged_in_users) — **join корректен**: одинаковая формула FNV-1a(host.name:btime:ses); объединяет все события от логина до выхода |
-| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery (processes, bpf_socket_events) — **join корректен**: одинаковая формула, одинаковый seed (epoch seconds) |
-| Процесс BPF (изолировано) | `process.entity_id` | osquery bpf_processes — **НЕ совпадает** с auditd/processes (seed: ntime в monotonic ns, не epoch). `bpf_socket_events` использует epoch-based start_time и совместим с auditd. |
+| Процесс (рекомендуется) | `process.entity_id` | auditd, osquery (processes, bpf_process_events, bpf_socket_events) — **join корректен**: одинаковая формула FNV-1a(host.name:pid:epoch_start_time) во всех четырёх источниках (QA-FIX-12). Для очень коротких BPF-процессов поле может отсутствовать (`labels.entity_id_source=bpf_proc_short_lived`) — fallback на `host.name + process.pid + @timestamp±2s`. |
 | Процесс (устаревший) | `process.pid` + `host.name` | auditd, osquery — ненадёжен при PID reuse |
 | Исходный IP (SSH) | `source.ip` | osquery logged_in_users |
 | Внешний IP | `destination.ip` | osquery process_connections, auditd connect/bind |
@@ -645,9 +644,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 > **Кросс-источниковый join по `user.session.id` корректен**: одна формула `FNV-1a(host.name + ":" + btime + ":" + ses)` в обоих enrich-скриптах. Для auditd `ses` берётся из каждого события напрямую; для osquery — из `/proc/<pid>/sessionid`. Поле отсутствует если `ses = 0` (kernel) или `ses = 0xFFFFFFFF` (unset), либо если процесс завершился до enrich osquery, либо для запросов osquery без PID.
 
-> **Кросс-источниковый join auditd ↔ osquery по `process.entity_id` корректен** при условии, что оба enrich-скрипта используют одинаковую формулу: `FNV-1a(host.name + ":" + pid + ":" + start_time)`, где `start_time` берётся из `/proc/<pid>/stat field 22 + btime` (целое число, epoch seconds). Для exit-событий короткоживущих процессов поле `labels.entity_id_source = "event_timestamp_fallback"` сигнализирует, что entity_id в этом документе **не совпадёт** с osquery.
-
-> **BPF process.entity_id исключение**: для таблицы `bpf_processes` seed = `host.name:pid:ntime` (ntime — kernel monotonic nanoseconds, не epoch). Join с auditd/processes по `process.entity_id` для bpf_processes **некорректен**.
+> **Кросс-источниковый join auditd ↔ osquery по `process.entity_id` корректен** во всех источниках (auditd execve, osquery/processes, osquery/bpf_process_events, osquery/bpf_socket_events) — единая формула `FNV-1a(host.name + ":" + pid + ":" + start_time)`, где `start_time` — epoch seconds из `/proc/<pid>/stat field 22 + btime`. Маркеры, сигнализирующие об отсутствии совпадения: `labels.entity_id_source = "event_timestamp_fallback"` (auditd exit короткоживущего процесса: `start_time` подменён `@timestamp`); `labels.entity_id_source = "bpf_proc_short_lived"` (osquery bpf_process_events: `/proc/<pid>/stat` уже недоступен → entity_id **не установлен**; UEBA-коррелятор должен использовать `host.name + process.pid + @timestamp±2s` как fallback).
 
 ---
 
