@@ -4,7 +4,7 @@
   "_meta": {
     "description": "UEBA auditd events — ECS 8.11 normalization via fluent-bit",
     "source": "ueba-stand/opensearch/templates",
-    "version": "2.0",
+    "version": "2.1",
     "project_version": "0.9"
   },
   "template": {
@@ -69,7 +69,7 @@
             "title":             { "type": "wildcard" },
             "args":              { "type": "keyword" },
             "args_count":        { "type": "integer" },
-            "working_directory": { "type": "keyword" },
+            "working_directory": { "type": "wildcard" },
             "entity_id":         { "type": "keyword" },
             "start":             { "type": "date" },
             "parent": {
@@ -157,8 +157,8 @@
         },
         "auditd": {
           "properties": {
-            "session": { "type": "integer" },
-            "paths":   { "type": "keyword" },
+            "session": { "type": "long" },
+            "paths":   { "type": "wildcard" },
             "data": {
               "properties": {
                 "syscall": { "type": "keyword" },
@@ -169,6 +169,11 @@
                 "a3":      { "type": "keyword" }
               }
             }
+          }
+        },
+        "service": {
+          "properties": {
+            "name": { "type": "keyword" }
           }
         },
         "key": { "type": "keyword" },

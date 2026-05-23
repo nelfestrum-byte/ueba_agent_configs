@@ -679,7 +679,16 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 - `source.ip`, `destination.ip`, `related.ip` → тип `ip`: поддерживают CIDR (`source.ip: 10.0.0.0/8`)
 - `process.command_line`, `process.executable`, `file.path` → тип `wildcard`: glob-поиск (`*bash -c*`)
 - `process.start`, `process.parent.start` → тип `date` (ISO 8601 строки через `to_iso()`): date range и date math работают корректно
-- `process.pid`, `destination.port`, `auditd.session`, `process.exit_code` → тип `integer` / `long`: числовые range-запросы
+- `process.pid`, `destination.port` → тип `integer`: числовые range-запросы
+- `auditd.session` → тип `long` (с v2.1 шаблона; раньше `integer`): числовой range
+- `process.exit_code` → тип `long`: int64 negatives (errno) для BPF
+- `osquery.pid`, `osquery.parent`, `osquery.tid`, `osquery.cid`, `osquery.ntime`, `osquery.duration`, `osquery.start_time` → тип `long` (с v2.1): range и avg-аггрегации по числовым полям osquery namespace
+- `osquery.local_port`, `osquery.remote_port` → тип `integer` (с v2.1): range по диапазону портов (1024–65535)
+- `osquery.exit_code` → тип `long` (с v2.1): нормализованный signed int64 из BPF taps
+- `osquery.uid`, `osquery.gid`, `osquery.euid`, `osquery.egid` → тип `keyword`: UID традиционно строковые в ECS (string compare + terms aggregation)
+- `auditd.paths` → тип `wildcard` (с v2.1; раньше `keyword`): glob-поиск по множественным путям (rename: source+dest)
+- `service.name` (audit) → тип `keyword` (с v2.1): systemd unit name для SERVICE_START/STOP
+- `container.image.tag` → тип `keyword` (с v2.1): добавлен в osquery namespace
 - `network.iana_number` → тип `keyword`: строковое значение IANA-номера протокола (не число)
 - `user.terminal` → тип `keyword`: имя tty/pts
 - все прочие строки → тип `keyword`: точный match и `terms` aggregation, без full-text поиска

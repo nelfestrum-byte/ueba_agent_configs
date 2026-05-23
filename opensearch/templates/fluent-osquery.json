@@ -4,7 +4,7 @@
   "_meta": {
     "description": "UEBA osquery diff events — ECS 8.11 + osquery.* namespace",
     "source": "ueba-stand/opensearch/templates",
-    "version": "2.0",
+    "version": "2.1",
     "project_version": "0.9"
   },
   "template": {
@@ -68,11 +68,17 @@
             "command_line": { "type": "wildcard" },
             "entity_id":    { "type": "keyword" },
             "start":        { "type": "date" },
+            "exit_code":    { "type": "long" },
+            "args":         { "type": "keyword" },
+            "args_count":   { "type": "integer" },
+            "working_directory": { "type": "wildcard" },
             "parent": {
               "properties": {
-                "pid":       { "type": "integer" },
-                "entity_id": { "type": "keyword" },
-                "start":     { "type": "date" }
+                "pid":          { "type": "integer" },
+                "entity_id":    { "type": "keyword" },
+                "start":        { "type": "date" },
+                "name":         { "type": "keyword" },
+                "command_line": { "type": "wildcard" }
               }
             }
           }
@@ -125,7 +131,8 @@
             "entity_id": { "type": "keyword" },
             "image": {
               "properties": {
-                "name": { "type": "keyword" }
+                "name": { "type": "keyword" },
+                "tag":  { "type": "keyword" }
               }
             }
           }
@@ -146,7 +153,49 @@
                 "unix_time":       { "type": "long" },
                 "version":         { "type": "keyword" }
               }
-            }
+            },
+            "pid":          { "type": "long" },
+            "parent":       { "type": "long" },
+            "tid":          { "type": "long" },
+            "local_port":   { "type": "integer" },
+            "remote_port":  { "type": "integer" },
+            "exit_code":    { "type": "long" },
+            "start_time":   { "type": "long" },
+            "ntime":        { "type": "long" },
+            "duration":     { "type": "long" },
+            "cid":          { "type": "long" },
+            "fd":           { "type": "long" },
+            "uid":          { "type": "keyword" },
+            "gid":          { "type": "keyword" },
+            "euid":         { "type": "keyword" },
+            "egid":         { "type": "keyword" },
+            "family":       { "type": "keyword" },
+            "protocol":     { "type": "keyword" },
+            "syscall":      { "type": "keyword" },
+            "type":         { "type": "keyword" },
+            "name":         { "type": "keyword" },
+            "path":         { "type": "wildcard" },
+            "cmdline":      { "type": "wildcard" },
+            "hostname":     { "type": "keyword" },
+            "username":     { "type": "keyword" },
+            "state":        { "type": "keyword" },
+            "status":       { "type": "keyword" },
+            "image":        { "type": "keyword" },
+            "image_id":     { "type": "keyword" },
+            "id":           { "type": "keyword" },
+            "local_address":  { "type": "keyword" },
+            "remote_address": { "type": "keyword" },
+            "process_name":   { "type": "keyword" },
+            "process_path":   { "type": "wildcard" },
+            "permissions":    { "type": "keyword" },
+            "serial_number":  { "type": "keyword" },
+            "description":    { "type": "keyword" },
+            "flags":          { "type": "keyword" },
+            "timeout":        { "type": "keyword" },
+            "usage":          { "type": "keyword" },
+            "start":          { "type": "keyword" },
+            "end":            { "type": "keyword" },
+            "probe_error":    { "type": "keyword" }
           }
         },
         "labels": {
