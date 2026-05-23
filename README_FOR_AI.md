@@ -84,9 +84,9 @@ auditd перехватывает системные вызовы на уров�
 | `event.kind` | keyword | всегда | `"event"` |
 | `event.dataset` | keyword | всегда | `"auditd"` |
 | `event.module` | keyword | всегда | `"auditd"` |
-| `event.category` | keyword | всегда | process / network / file / authentication / iam |
+| `event.category` | keyword[] | всегда | process / network / file / authentication / iam / host / configuration. Может быть **массивом** для AF_UNIX-сокетов (`["network","file"]` — IPC через файл-сокет) — ECS-расширение проекта. |
 | `event.type` | keyword | всегда | start / end / access / deletion / creation / change / info |
-| `event.action` | keyword | при syscall | имя syscall (execve, connect, openat, ...) |
+| `event.action` | keyword | всегда (см. fallback) | имя syscall (`execve`, `connect`, `openat`, ...); для PAM/USER_* — `user_auth`, `user_acct`, `user_cmd`, `user_login` и т.п.; для systemd unit lifecycle — `service_started` / `service_stopped`. Если syscall номер неизвестен enrich'у — `syscall_<num>` (fallback, см. QA-02). |
 | `event.outcome` | keyword | при наличии | success / failure |
 | `host.name` | keyword | всегда | FQDN агентского хоста |
 | `host.os.type` | keyword | всегда | `"linux"` |
@@ -103,7 +103,7 @@ auditd перехватывает системные вызовы на уров�
 | `process.executable` | keyword | при syscall | полный путь (exe) |
 | `process.title` | keyword | при syscall | Сырой proctitle (полная командная строка из `/proc/<pid>/comm`-поля auditd PROCTITLE). |
 | `process.command_line` | keyword | при execve или proctitle | Нормализованная командная строка: preferably из EXECVE-аргументов, иначе proctitle. |
-| `process.args` | keyword[] | при execve | аргументы (массив) |
+| `process.args` | keyword[] | при execve | Аргументы execve как массив, **в порядке индекса** (`process.args[0]` = базовое имя процесса, `args[1..N-1]` = передаваемые аргументы). Например, для `sleep 10`: `["sleep","10"]`. Источник — EXECVE-запись auditd (поля `a0..a<argc-1>`), длина определяется по `argc`. |
 | `process.args_count` | integer | при execve | количество аргументов |
 | `process.working_directory` | keyword | при CWD | рабочая директория |
 | `labels.entity_id_source` | keyword | при fallback | `event_timestamp_fallback` — процесс исчез из `/proc` до enrich (exit-событие короткоживущего); entity_id такого события **не совпадёт** с osquery. |
@@ -116,7 +116,8 @@ auditd перехватывает системные вызовы на уров�
 | `source.port` | integer | при accept/accept4 | Порт подключившегося клиента. |
 | `destination.ip` | ip | при connect/bind | IP назначения или адрес привязки. |
 | `destination.port` | integer | при connect/bind | Порт назначения или bind-порт. |
-| `network.type` | keyword | при сетевых syscall | `"ipv4"` / `"ipv6"` — определяется из SOCKADDR family (AF_INET=2, AF_INET6=10). |
+| `network.type` | keyword | при сетевых syscall | `"ipv4"` / `"ipv6"` (AF_INET=2, AF_INET6=10), `"unix"` (AF_UNIX=1 — IPC сокеты), `"netlink"` (AF_NETLINK=16 — управление ядром), `"packet"` (AF_PACKET=17 — raw L2). Для AF_UNIX `event.category=["network","file"]`; для AF_NETLINK/AF_PACKET `event.category="process"`. |
+| `service.name` | keyword | при SERVICE_START/STOP | Имя systemd-юнита из `unit=<name>` в msg-поле SERVICE_*-записи auditd. |
 | `file.path` | keyword | при PATH | полный путь файла |
 | `file.name` | keyword | при PATH | имя файла |
 | `file.extension` | keyword | при PATH | Расширение файла (из имени, после последней точки). |
@@ -157,6 +158,9 @@ auditd перехватывает системные вызовы на уров�
 | `timestomp` (utimensat/utimes/futimesat) | Подмена mtime/atime файлов — T1070.006 anti-forensics |
 | `kexec_hot_replace` | kexec_file_load/kexec_load — горячая замена ядра |
 | `audit_log_tamper` | Запись в /var/log/audit/ — попытка затереть audit-логи |
+| `service_started` / `service_stopped` | systemd unit lifecycle (SERVICE_START/SERVICE_STOP). ECS: `service.name`, `event.outcome`, `event.category: host`. UEBA: новый запущенный сервис → отклонение от baseline. |
+| `user_auth` / `user_acct` / `user_cmd` / `user_login` / `user_start` / `user_end` / `cred_acq` | PAM-события (sudo, SSH, su). ECS: `user.name` (вызывающий), `user.target.name` (target — `root` при sudo), `event.outcome` из `res=`. `event.category` — `authentication` (кроме USER_CMD → `process`). |
+| `syscall_<num>` | Fallback — syscall, отсутствующий в таблице SYSCALLS enrich-скрипта. UEBA: индикатор нового/неучтённого syscall'а; добавлять часто встречающиеся номера в `auditd_enrich.lua` SYSCALLS. |
 
 ---
 

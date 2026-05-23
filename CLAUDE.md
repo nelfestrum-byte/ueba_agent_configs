@@ -101,7 +101,7 @@ ueba-stand/
 | **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch; Tier A (P1-01): anti-forensics, persistence, container escape; Tier B: env/mac/pkg/firewall/dns — cherry-pick из Neo23x0/auditd |
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd + osquery pipelines |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
-| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id` |
+| **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id`; обработчики USER_*/CRED_*/SERVICE_START/SERVICE_STOP и реклассификация AF_UNIX/AF_NETLINK/AF_PACKET сокетов (QA-02) |
 | **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
@@ -255,6 +255,26 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 На хостах с включённым BPF backend (`[docker_hosts]`) osqueryd триггерит это правило при загрузке BPF-программ → feedback loop. **Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`** — отдельный коммит.
 
+### `USER_*` / `SERVICE_*`: очистка raw-полей в самом конце enrich (QA-02)
+
+`auditd_enrich.lua` хранит merge-поля `USER_*`/`CRED_*`/`SERVICE_*` с префиксом источника (`user_res`, `user_ses`, `cred_disp_acct`, `service_start_msg`, ...). Очистка этих полей должна выполняться **в самом конце** функции `enrich_ecs`, **после** блоков «Результат события» (читает `user_res`/`service_*_res` → `event.outcome`) и «Сессия auditd» (читает `user_ses` → `auditd.session`).
+
+**Грабли (QA-01 → QA-02):** ранее очистка стояла внутри блока `USER_*` и удаляла `user_res`/`user_ses` до того, как они читались → `event.outcome` и `auditd.session` отсутствовали в 100% authentication-событий. Если двигаешь блоки или добавляешь новый источник с префиксом — убедись, что финальный cleanup идёт последним.
+
+### process.args порядок — собирать по индексу `argc`, не через pairs() (QA-02)
+
+`auditd_merge.lua` блок EXECVE собирает `_execve_args` итерируясь по `a0..a<argc-1>` через `tonumber(kv.argc)`. **Нельзя** использовать `for k,v in pairs(kv) do if k:match("^a%d+$") then ...` — порядок хеш-таблицы недетерминирован и реверсирует args (`sleep 10` → `["10","sleep"]`), что ломает ECS и совместимость с Elastic.
+
+### AF_UNIX/AF_NETLINK/AF_PACKET — реклассификация event.category (QA-02)
+
+decode_saddr в `auditd_enrich.lua` возвращает `unix`/`netlink`/`packet` для family 1/16/17 соответственно. Блок SOCKADDR:
+
+- **AF_UNIX (family=1)**: `event.category=["network","file"]` (массив — двойная категория для IPC через файл-сокет), `network.type=unix`.
+- **AF_NETLINK (family=16)**: `event.category=process` (управление ядром/маршрутизацией, не сетевой трафик), `network.type=netlink`.
+- **AF_PACKET (family=17)**: `event.category=process` (raw L2 — sniffer/forwarder), `network.type=packet`.
+
+Это **ECS-расширение проекта** (ECS допускает массив в `event.category`); не путать с baseline ECS, где AF_UNIX-сокеты обычно идут как `network`.
+
 ---
 
 ## Что НЕ читать
@@ -265,5 +285,5 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 ---
 
-**Последнее обновление:** 2026-05-22
+**Последнее обновление:** 2026-05-23
 **Версия проекта:** 0.9 — auditd+fluent-bit+osquery (pure fluent-bit стек) → Logstash → OpenSearch

@@ -58,6 +58,8 @@ local EVENT_CATEGORY = {
     NETFILTER_CFG = {"network","configuration"},
     PATH          = {"file"},
     CWD           = {"file"},
+    SERVICE_START = {"host"},                -- systemd unit lifecycle
+    SERVICE_STOP  = {"host"},
 }
 
 -- ── MITRE ATT&CK теги по syscall ──
@@ -106,6 +108,10 @@ local function decode_saddr(saddr)
         end
     elseif family == 1 then                        -- AF_UNIX
         return "unix", nil, nil
+    elseif family == 16 then                       -- AF_NETLINK
+        return "netlink", nil, nil
+    elseif family == 17 then                       -- AF_PACKET
+        return "packet", nil, nil
     end
     return nil, nil, nil
 end
@@ -170,6 +176,8 @@ function enrich_ecs(tag, timestamp, record)
     elseif etypes["USER_CMD"]      then primary_type = "USER_CMD"
     elseif etypes["LOGIN"]         then primary_type = "LOGIN"
     elseif etypes["NETFILTER_CFG"] then primary_type = "NETFILTER_CFG"
+    elseif etypes["SERVICE_START"] then primary_type = "SERVICE_START"
+    elseif etypes["SERVICE_STOP"]  then primary_type = "SERVICE_STOP"
     end
 
     local cats = EVENT_CATEGORY[primary_type] or {"host"}
@@ -358,9 +366,22 @@ function enrich_ecs(tag, timestamp, record)
         --]]
     end
 
-    -- ── PAM / USER события (USER_START, USER_END, CRED_DISP, CRED_REFR, …) ──
+    -- Fallback: syscall number есть, но не в SYSCALLS — оставляем номер в
+    -- event.action чтобы поле не было пустым (фикс для UEBA-корреляции).
+    -- При появлении новых таких номеров — добавить их в таблицу SYSCALLS.
+    if sc_num and not sc_name then
+        record["event.action"]        = "syscall_" .. sc_num
+        record["auditd.data.syscall"] = "syscall_" .. sc_num
+    end
+
+    -- ── PAM / USER события (USER_START, USER_END, USER_LOGIN, USER_CMD, CRED_*, …) ──
+    -- ВНИМАНИЕ: НЕ удалять здесь user_*/cred_* поля — они читаются ниже:
+    --   user_res → event.outcome (блок «Результат события»)
+    --   user_ses → auditd.session (блок «Сессия auditd»)
+    -- Очистка перенесена в финальный блок ниже.
     if primary_type == "USER_START"  or primary_type == "USER_END"
     or primary_type == "USER_ACCT"   or primary_type == "USER_LOGOUT"
+    or primary_type == "USER_LOGIN"  or primary_type == "USER_CMD"
     or primary_type == "CRED_DISP"   or primary_type == "CRED_REFR"
     or primary_type == "CRED_ACQ" then
 
@@ -368,6 +389,7 @@ function enrich_ecs(tag, timestamp, record)
         record["event.action"] = etype:lower()
 
         if primary_type == "USER_START" or primary_type == "USER_ACCT"
+        or primary_type == "USER_LOGIN" or primary_type == "USER_CMD"
         or primary_type == "CRED_ACQ" then
             record["event.type"] = "start"
         elseif primary_type == "USER_END" or primary_type == "USER_LOGOUT" then
@@ -387,18 +409,36 @@ function enrich_ecs(tag, timestamp, record)
         if u_target and u_target ~= "" then record["user.target.name"]   = u_target end
         if u_exe    and u_exe    ~= "" then record["process.executable"] = decode_hex_str(u_exe) end
         if u_pid                       then record["process.pid"]        = u_pid    end
+    end
 
-        -- collect keys to delete first, then delete (safe iteration)
-        local keys_to_del = {}
-        for k in pairs(record) do
-            for _, prefix in ipairs({"user_", "cred_disp_", "cred_refr_", "cred_acq_"}) do
-                if k:sub(1, #prefix) == prefix then
-                    keys_to_del[#keys_to_del+1] = k
-                    break
-                end
-            end
+    -- ── SERVICE_START / SERVICE_STOP (systemd unit lifecycle) ──
+    if primary_type == "SERVICE_START" or primary_type == "SERVICE_STOP" then
+        record["event.action"] = (primary_type == "SERVICE_START")
+            and "service_started" or "service_stopped"
+        record["event.type"]   = (primary_type == "SERVICE_START") and "start" or "end"
+
+        local prefix = primary_type:lower() .. "_"  -- "service_start_" / "service_stop_"
+
+        -- msg обычно содержит "unit=<name> comm=systemd exe=... res=success"
+        local raw_msg = record[prefix .. "msg"]
+        if raw_msg then
+            local unit = raw_msg:match("unit=([%w@%-_.:]+)")
+            if unit then record["service.name"] = unit end
         end
-        for _, k in ipairs(keys_to_del) do record[k] = nil end
+
+        local res = record[prefix .. "res"]
+        if res then
+            res = res:match("^([%a]+)") or res
+            record["event.outcome"] = (res == "success") and "success" or "failure"
+        end
+
+        if record[prefix .. "pid"] then record["process.pid"] = tonumber(record[prefix .. "pid"]) end
+        if record[prefix .. "exe"] then record["process.executable"] = decode_hex_str(record[prefix .. "exe"]) end
+        if record[prefix .. "uid"] then record["user.id"] = record[prefix .. "uid"] end
+        if record[prefix .. "UID"] and record[prefix .. "UID"] ~= "unset" then
+            record["user.name"] = record[prefix .. "UID"]
+        end
+        -- raw service_start_*/service_stop_* поля удаляются в финальном блоке
     end
 
     -- ── Файл (из PATH и CWD) ──
@@ -444,6 +484,19 @@ function enrich_ecs(tag, timestamp, record)
                 record["destination.port"] = port
             end
             record["network.type"] = net_type
+        elseif net_type == "unix" then
+            -- AF_UNIX: IPC через файл-сокет → двойная ECS-категория
+            -- (network + file). Позволяет file-корреляторам видеть socket-paths.
+            record["event.category"] = {"network", "file"}
+            record["network.type"]   = "unix"
+        elseif net_type == "netlink" then
+            -- AF_NETLINK: управление ядром/маршрутизацией — process-семантика
+            record["event.category"] = "process"
+            record["network.type"]   = "netlink"
+        elseif net_type == "packet" then
+            -- AF_PACKET: raw L2 — process-семантика (sniffer/forwarder)
+            record["event.category"] = "process"
+            record["network.type"]   = "packet"
         end
         record["socket_saddr"]  = nil
         record["socket_family"] = nil
@@ -482,6 +535,22 @@ function enrich_ecs(tag, timestamp, record)
     record["_event_types"]     = nil
     record["syscall_success"]  = nil
     record["syscall_exit"]     = nil
+
+    -- user_*/cred_*/service_*_* поля чистим В САМОМ КОНЦЕ — после того как
+    -- event.outcome (user_res / service_*_res) и auditd.session (user_ses)
+    -- уже считаны. Очистка раньше = пустой outcome/session.
+    local to_del = {}
+    for k in pairs(record) do
+        if k:sub(1, 5)  == "user_"
+        or k:sub(1, 10) == "cred_disp_"
+        or k:sub(1, 10) == "cred_refr_"
+        or k:sub(1, 9)  == "cred_acq_"
+        or k:sub(1, 14) == "service_start_"
+        or k:sub(1, 13) == "service_stop_" then
+            to_del[#to_del + 1] = k
+        end
+    end
+    for _, k in ipairs(to_del) do record[k] = nil end
 
     return 2, timestamp, record
 end

@@ -109,9 +109,14 @@ local function merge_into_buf(serial, atype, msg, timestamp)
 
     elseif atype == "EXECVE" then
         entry["execve_argc"] = kv["argc"]
-        for k, v in pairs(kv) do
-            if k:match('^a%d+$') then
-                entry["_execve_args"][#entry["_execve_args"]+1] = decode_hex(v)
+        -- Собираем a0, a1, ..., a<argc-1> в порядке индекса.
+        -- pairs(kv) НЕ детерминирован — порядок хеш-таблицы реверсирует args.
+        local argc = tonumber(kv["argc"]) or 0
+        local args = entry["_execve_args"]
+        for i = 0, argc - 1 do
+            local v = kv["a" .. i]
+            if v then
+                args[#args + 1] = decode_hex(v)
             end
         end
 
