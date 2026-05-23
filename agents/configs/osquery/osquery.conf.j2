@@ -211,7 +211,7 @@
     },
 
     "suspicious_mmap": {
-      "query": "SELECT pmm.pid, pmm.path, pmm.start, pmm.end, p.name AS process_name FROM process_memory_map pmm JOIN processes p ON p.pid = pmm.pid WHERE pmm.path != '' AND pmm.path NOT LIKE '/usr/%' AND pmm.path NOT LIKE '/lib/%' AND pmm.path NOT LIKE '/lib64/%' AND pmm.path NOT LIKE '[%';",
+      "query": "SELECT pmm.pid, pmm.path, pmm.start, pmm.end, p.name AS process_name, p.path AS process_path FROM process_memory_map pmm JOIN processes p ON p.pid = pmm.pid WHERE pmm.path != '' AND pmm.path NOT LIKE '/usr/%' AND pmm.path NOT LIKE '/lib/%' AND pmm.path NOT LIKE '/lib64/%' AND pmm.path NOT LIKE '[%';",
       "interval": 300,
       "removed": false,
       "description": "Non-standard shared objects mmap'd by processes — injection detection (P2-02)"

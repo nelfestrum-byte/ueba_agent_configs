@@ -17,6 +17,15 @@ local pid_cid_cache      = {}
 local _pid_cid_size      = 0
 local PID_CID_CACHE_MAX  = 5000
 
+-- Маппинг osquery.cid (cgroup namespace inode, число) → container.id (12-hex).
+-- Заполняется при обработке docker_containers diff: для каждого added контейнера
+-- читаем /proc/<container.pid>/ns/cgroup → symlink "cgroup:[<inode>]" → <inode>.
+-- BPF события с тем же cid резолвятся в container.id даже когда /proc/<pid>/cgroup
+-- недоступен (короткоживущий subprocess).
+local cgroup_ns_cache  = {}   -- { [cgroup_inode_str] = container_id_12hex }
+local _cgns_size       = 0
+local CGNS_CACHE_MAX   = 1000
+
 -- Читает /proc/<pid>/cgroup и возвращает первые 12 символов Docker container ID.
 -- cgroup v2: "0::/system.slice/docker-<hex>.scope"
 -- cgroup v1: ".../docker/<hex>"
@@ -33,9 +42,27 @@ local function get_docker_cid(pid)
     return nil
 end
 
+-- Читает /proc/<pid>/ns/cgroup и возвращает inode как строку.
+-- Формат symlink: "cgroup:[4026532177]" → "4026532177".
+-- Используется при docker_containers/added для пополнения cgroup_ns_cache.
+local function get_cgroup_ns(pid)
+    if not pid or pid == "" then return nil end
+    local p = io.popen("readlink /proc/" .. tostring(pid) .. "/ns/cgroup 2>/dev/null")
+    if not p then return nil end
+    local link = p:read("*l")
+    p:close()
+    if not link then return nil end
+    return link:match("cgroup:%[(%d+)%]")
+end
+
 -- Пытается определить Docker container ID для процесса pid.
--- Порядок: /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache[ppid].
-local function resolve_container_id(pid, parent_pid)
+-- Порядок:
+--   0. cgroup_ns_cache[osquery.cid] — самый дешёвый, работает для коротко-
+--      живущих subprocess после первого docker_containers diff.
+--   1. /proc/<pid>/cgroup           — авторитетно, пока процесс жив.
+--   2. /proc/<ppid>/cgroup          — для exit-событий, если родитель жив.
+--   3. pid_cid_cache[ppid]          — фолбэк parent chain.
+local function resolve_container_id(pid, parent_pid, cid_inode)
     local function cache_put(p, cid)
         if not p or p == "" then return end
         if _pid_cid_size >= PID_CID_CACHE_MAX then
@@ -44,6 +71,15 @@ local function resolve_container_id(pid, parent_pid)
         end
         if not pid_cid_cache[p] then _pid_cid_size = _pid_cid_size + 1 end
         pid_cid_cache[p] = cid
+    end
+
+    -- 0. cgroup namespace inode из docker_containers
+    if cid_inode and cid_inode ~= "" and cid_inode ~= "0" then
+        local cid = cgroup_ns_cache[tostring(cid_inode)]
+        if cid then
+            if pid and pid ~= "" then cache_put(tostring(pid), cid) end
+            return cid
+        end
     end
 
     local cid = get_docker_cid(pid)
@@ -345,17 +381,34 @@ local QUERY_META = {
         type_removed   = "end",
     },
     docker_containers = {
+        -- osquery diff не отражает реальный lifecycle (start/stop) —
+        -- only появление/исчезновение строки в snapshot-таблице. Поэтому
+        -- observed_*, не started/stopped. Реальный lifecycle — Docker Events API
+        -- (см. HARDENING/CONTAINER_BEHAVIOR_PLAN.md, P4).
         category = "host",
-        action_added   = "container_started",
-        action_removed = "container_stopped",
-        type_added     = "start",
-        type_removed   = "end",
+        action_added   = "container_observed_added",
+        action_removed = "container_observed_removed",
+        type_added     = "info",
+        type_removed   = "info",
     },
 }
 
 -- ── Протокол: номер IANA → имя ────────────────────────────────────────────
 local PROTO = { ["6"] = "tcp", ["17"] = "udp", ["1"] = "icmp",
                 ["58"] = "ipv6-icmp", ["132"] = "sctp" }
+
+-- BPF taps log syscall return codes as uint64; negative errno (e.g. -115
+-- EINPROGRESS) приходит как 2^64 - 115 = 18446744073709551501.
+-- Декодируем обратно в signed int64.
+local INT64_MAX = 9223372036854775807
+local UINT64_MOD = 18446744073709551616
+local function normalize_int64(v)
+    if v == nil or v == "" then return v end
+    local n = tonumber(v)
+    if not n then return v end
+    if n > INT64_MAX then n = n - UINT64_MOD end
+    return n
+end
 
 -- ── Главная функция ───────────────────────────────────────────────────────
 function enrich_osquery(tag, timestamp, record)
@@ -420,9 +473,16 @@ function enrich_osquery(tag, timestamp, record)
     end
 
     -- ── Колонки → osquery.<column> ────────────────────────────────────────
+    -- exit_code: BPF возвращает signed int64 как uint64 — декодируем, иначе
+    -- значения вида 18446744073709551501 (=-115 EINPROGRESS) ломают range queries
+    -- и mapping (uint64 не помещается в long).
     for k, v in pairs(cols) do
         if v ~= nil and v ~= "" then
-            record["osquery." .. k] = v
+            if k == "exit_code" then
+                record["osquery." .. k] = normalize_int64(v)
+            else
+                record["osquery." .. k] = v
+            end
         end
     end
 
@@ -563,7 +623,7 @@ function enrich_osquery(tag, timestamp, record)
         if cols["uid"]       and cols["uid"] ~= "" then record["user.id"]        = cols["uid"] end
         if cols["gid"]       and cols["gid"] ~= "" then record["user.group.id"]  = cols["gid"] end
         if cols["exit_code"] and cols["exit_code"] ~= "" then
-            record["process.exit_code"] = tonumber(cols["exit_code"])
+            record["process.exit_code"] = normalize_int64(cols["exit_code"])
         end
 
         -- process.entity_id — seed: host:pid:ntime (kernel monotonic ns).
@@ -576,9 +636,9 @@ function enrich_osquery(tag, timestamp, record)
             record["process.entity_id"] = common.short_id(seed)
         end
 
-        -- container resolution: /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache
-        -- cols["cid"] — cgroup namespace inode (число), не Docker ID, не используем
-        local cid = resolve_container_id(cols["pid"], cols["parent"])
+        -- container resolution:
+        -- cgroup_ns_cache[osquery.cid] → /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache
+        local cid = resolve_container_id(cols["pid"], cols["parent"], cols["cid"])
         if cid then
             record["container.id"] = cid
             -- кэшируем pid для последующих bpf_socket_events того же процесса
@@ -596,7 +656,15 @@ function enrich_osquery(tag, timestamp, record)
     -- ── BPF socket events (P2-01, docker-хосты) ──────────────────────────
     elseif query_name == "bpf_sockets" then
         record["event.dataset"] = "osquery.bpf_socket_events"
-        if cols["pid"]    then record["process.pid"] = tonumber(cols["pid"]) end
+
+        local fam   = cols["family"]
+        local is_ip = (fam == "2" or fam == "10")
+
+        if cols["pid"]    then record["process.pid"]        = tonumber(cols["pid"]) end
+        if cols["parent"] then record["process.parent.pid"] = tonumber(cols["parent"]) end
+        if cols["path"]   and cols["path"] ~= "" then
+            record["process.executable"] = cols["path"]
+        end
 
         -- process.entity_id: epoch-based start_time через /proc/<pid>/stat,
         -- та же формула что в auditd_enrich и osquery/processes →
@@ -614,53 +682,64 @@ function enrich_osquery(tag, timestamp, record)
             end
         end
 
-        -- syscall (bind/connect/accept) переопределяет QUERY_META default
         local syscall = cols["syscall"] or cols["action"]
-        if syscall and syscall ~= "" then
-            record["event.action"] = "socket_" .. syscall
-        end
 
-        -- family: только AF_INET=2 и AF_INET6=10 имеют смысл в ECS;
-        -- AF_NETLINK=16 и прочие — не устанавливаем network.type.
-        local fam = cols["family"]
-        if fam == "2"  then record["network.type"] = "ipv4"
-        elseif fam == "10" then record["network.type"] = "ipv6"
-        end
+        if is_ip then
+            -- syscall (bind/connect/accept) переопределяет QUERY_META default
+            if syscall and syscall ~= "" then
+                record["event.action"] = "socket_" .. syscall
+            end
 
-        -- protocol: IANA number → имя; сырое число в network.transport не пишем.
-        local proto = cols["protocol"]
-        if proto and proto ~= "0" then
-            local proto_name = PROTO[proto]
-            if proto_name then record["network.transport"] = proto_name end
-            record["network.iana_number"] = proto
+            -- family → network.type (AF_INET=2 / AF_INET6=10)
+            if fam == "2"  then record["network.type"] = "ipv4"
+            elseif fam == "10" then record["network.type"] = "ipv6"
+            end
+
+            -- protocol: IANA number → имя; сырое число в network.transport не пишем.
+            local proto = cols["protocol"]
+            if proto and proto ~= "0" then
+                local proto_name = PROTO[proto]
+                if proto_name then record["network.transport"] = proto_name end
+                record["network.iana_number"] = proto
+            else
+                -- protocol=0: приложение использовало SOCK_STREAM/SOCK_DGRAM
+                -- с protocol=0 (ядро выбирает автоматически). Best-effort:
+                -- AF_INET/AF_INET6 + remote_port>0 → предполагаем TCP (connect/accept).
+                -- Не применяем к bind (socket_bind может быть UDP).
+                local rport = tonumber(cols["remote_port"])
+                if rport and rport > 0 then
+                    record["network.transport"] = "tcp"
+                    record["labels.transport_inferred"] = "true"
+                end
+            end
+
+            -- "0" из BPF — unbound/any адрес, не валидный IP для OpenSearch.
+            if cols["local_address"]  and cols["local_address"] ~= "" and cols["local_address"] ~= "0" then
+                record["source.ip"]   = cols["local_address"]
+            end
+            if cols["local_port"]     and cols["local_port"] ~= "" then
+                record["source.port"] = tonumber(cols["local_port"])
+            end
+            if cols["remote_address"] and cols["remote_address"] ~= "" and cols["remote_address"] ~= "0" then
+                record["destination.ip"]   = cols["remote_address"]
+            end
+            if cols["remote_port"]    and cols["remote_port"] ~= "" then
+                record["destination.port"] = tonumber(cols["remote_port"])
+            end
         else
-            -- protocol=0: приложение использовало SOCK_STREAM/SOCK_DGRAM
-            -- с protocol=0 (ядро выбирает автоматически). Best-effort:
-            -- AF_INET/AF_INET6 + remote_port>0 → предполагаем TCP (connect/accept).
-            -- Не применяем к bind (socket_bind может быть UDP).
-            local rport = tonumber(cols["remote_port"])
-            if (fam == "2" or fam == "10") and rport and rport > 0 then
-                record["network.transport"] = "tcp"
-                record["labels.transport_inferred"] = "true"
+            -- AF_UNIX=1, AF_NETLINK=16, AF_PACKET=17, прочие non-IP family.
+            -- Reklass из QUERY_META "network" → "process": это не сетевой
+            -- трафик, а IPC / управление ядром. ECS network.* поля не ставим
+            -- (нет IP/port, заполнение нулями = шум в OpenSearch).
+            record["event.category"] = "process"
+            if syscall and syscall ~= "" then
+                record["event.action"] = "socket_" .. syscall .. "_nonip"
             end
         end
 
-        -- "0" из BPF — unbound/any адрес, не валидный IP для OpenSearch.
-        if cols["local_address"]  and cols["local_address"] ~= "" and cols["local_address"] ~= "0" then
-            record["source.ip"]   = cols["local_address"]
-        end
-        if cols["local_port"]     and cols["local_port"] ~= "" then
-            record["source.port"] = tonumber(cols["local_port"])
-        end
-        if cols["remote_address"] and cols["remote_address"] ~= "" and cols["remote_address"] ~= "0" then
-            record["destination.ip"]   = cols["remote_address"]
-        end
-        if cols["remote_port"]    and cols["remote_port"] ~= "" then
-            record["destination.port"] = tonumber(cols["remote_port"])
-        end
-
-        -- container resolution: /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache
-        local cid = resolve_container_id(cols["pid"], cols["parent"])
+        -- container resolution (общий для is_ip и non-IP):
+        -- cgroup_ns_cache[osquery.cid] → /proc/<pid>/cgroup → /proc/<ppid>/cgroup → pid_cid_cache
+        local cid = resolve_container_id(cols["pid"], cols["parent"], cols["cid"])
         if cid then
             record["container.id"] = cid
             local meta = container_cache[cid]
@@ -686,12 +765,39 @@ function enrich_osquery(tag, timestamp, record)
                 container_cache[cid] = { name = name, image = img }
             else
                 container_cache[cid] = nil
+                -- НЕ удаляем запись из cgroup_ns_cache при removed: osquery diff
+                -- может «мигнуть» (контейнер бежит, но строка пропала на 1 интервал).
+                -- Кэш чистится только bulk-evict при переполнении.
             end
 
             record["container.id"]         = cid
             record["container.name"]       = name
             record["container.image.name"] = img   -- ECS 8.x: container.image.name
             record["container.entity_id"]  = (record["host.name"] or "") .. ":" .. name
+
+            -- Заполняем cgroup_ns_cache для последующего резолвинга BPF-событий
+            -- по osquery.cid (cgroup namespace inode), включая короткоживущие
+            -- subprocess где /proc/<pid>/cgroup уже недоступен.
+            if action == "added" and cols["pid"] and cols["pid"] ~= "" and cols["pid"] ~= "0" then
+                local cgns = get_cgroup_ns(cols["pid"])
+                if cgns then
+                    if _cgns_size >= CGNS_CACHE_MAX then
+                        cgroup_ns_cache = {}
+                        _cgns_size = 0
+                    end
+                    if not cgroup_ns_cache[cgns] then _cgns_size = _cgns_size + 1 end
+                    cgroup_ns_cache[cgns] = cid
+                end
+            end
+
+            -- Fallback по osquery.state: если контейнер exited/dead — это
+            -- event.action=container_exited, не observed_removed.
+            -- state="running"/"created"/"exited"/"paused"/"dead".
+            local state = cols["state"]
+            if state == "exited" or state == "dead" then
+                record["event.action"] = "container_exited"
+                record["event.type"]   = "end"
+            end
         end
     end
 
@@ -754,6 +860,12 @@ function enrich_osquery(tag, timestamp, record)
 
     elseif query_name == "kernel_keys_diff" then
         record["event.dataset"] = "osquery.kernel_keys"
+        -- user.id выставлен общим блоком user (cols.uid); user.name отсутствует
+        -- в kernel_keys-таблице osquery → резолвим через /etc/passwd cache.
+        if record["user.id"] and not record["user.name"] then
+            local uname = common.uid_to_name(record["user.id"])
+            if uname then record["user.name"] = uname end
+        end
 
     elseif query_name == "sudoers_diff" then
         record["event.dataset"] = "osquery.sudoers"
@@ -765,6 +877,10 @@ function enrich_osquery(tag, timestamp, record)
         record["event.dataset"] = "osquery.process_memory_map"
         if cols["pid"]          then record["process.pid"]  = tonumber(cols["pid"]) end
         if cols["process_name"] then record["process.name"] = cols["process_name"] end
+        if cols["process_path"] and cols["process_path"] ~= "" then
+            record["process.executable"] = cols["process_path"]
+        end
+        -- pmm.path в этой таблице — путь mmap-региона (mapped file), не процесса.
         if cols["path"]         then record["file.path"]    = cols["path"] end
 
     elseif query_name == "chrome_extensions_diff" then

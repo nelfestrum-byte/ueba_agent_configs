@@ -169,6 +169,26 @@ function M.resolve_cmdline(pid)
     return c
 end
 
+-- Lazy-loaded UID → username map из /etc/passwd. Кэш на всё время жизни
+-- Lua VM (system users редко меняются). Изменения /etc/passwd подхватываются
+-- только при рестарте fluent-bit — это known limitation.
+local _passwd_cache = nil
+function M.uid_to_name(uid)
+    if not uid then return nil end
+    if _passwd_cache == nil then
+        _passwd_cache = {}
+        local f = io.open("/etc/passwd", "r")
+        if f then
+            for line in f:lines() do
+                local name, uid_str = line:match("^([^:]+):[^:]*:(%d+):")
+                if name and uid_str then _passwd_cache[uid_str] = name end
+            end
+            f:close()
+        end
+    end
+    return _passwd_cache[tostring(uid)]
+end
+
 function M.get_hostname()
     if not _hostname then
         local f = io.popen("hostname -f 2>/dev/null")

@@ -102,7 +102,7 @@ ueba-stand/
 | **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf` | auditd + osquery pipelines |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id`; обработчики USER_*/CRED_*/SERVICE_START/SERVICE_STOP и реклассификация AF_UNIX/AF_NETLINK/AF_PACKET сокетов (QA-02) |
-| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd |
+| **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd; QA-03: `cgroup_ns_cache` (osquery.cid → container.id) + AF_NETLINK/AF_UNIX → category=process + `normalize_int64` для BPF exit_code + `uid_to_name` для kernel_keys + `container_observed_*` action |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | logstash_host, версии .deb, osquery_profile |
@@ -235,6 +235,16 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 **Feedback loop с auditd `-S bpf`:** osqueryd при загрузке BPF-программ триггерит правило `-S bpf` в audit.rules → события попадают в fluent-bit → snowball. Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd` (отдельный коммит, не смешивать с другими задачами).
 
 **container_cache в osquery_enrich.lua:** in-memory словарь `cid[12] → {name, image}`. Заполняется из diff-событий `docker_containers`. `bpf_process_events` и `bpf_socket_events` используют кэш для резолвинга `container.name` / `container.image.name` / `container.entity_id`. Кэш теряется при рестарте fluent-bit — первые BPF-события после рестарта не получат container-атрибуцию.
+
+**cgroup_ns_cache в osquery_enrich.lua (QA-03):** in-memory маппинг `cgroup_namespace_inode → container.id[12]`. Заполняется при `docker_containers/added`: для каждого added контейнера enrich читает `/proc/<container.pid>/ns/cgroup` через `readlink` (символлинк `cgroup:[<inode>]`). BPF-события содержат `cols.cid = inode` — это позволяет резолвить `container.id` даже для короткоживущих subprocess, где `/proc/<pid>/cgroup` уже недоступен (`bpf_process_events` для `/app/extra/healthcheck`, `/bin/sh` итд). **Failure modes:**
+
+- Кэш теряется при рестарте fluent-bit. Первые BPF-события после рестарта без container-атрибуции до прихода первого `docker_containers/added` diff (≤30 сек).
+- При `docker_containers/removed` запись из кэша **НЕ** удаляется — osquery diff может «мигнуть» (контейнер бежит, но строка пропала на 1 интервал и вернулась). Bulk evict только при превышении `CGNS_CACHE_MAX = 1000`.
+- `event.action="container_observed_added"`/`"container_observed_removed"` (НЕ `started/stopped`): osquery diff не отражает реальный lifecycle, а только присутствие в snapshot. Реальный lifecycle — Docker Events API (см. `HARDENING/CONTAINER_BEHAVIOR_PLAN.md`, P4). Fallback `event.action=container_exited` если `osquery.state in ("exited","dead")`.
+
+**BPF exit_code overflow (QA-03):** BPF taps записывают signed int64 как uint64 — `-115 EINPROGRESS` приходит как `18446744073709551501`. `normalize_int64()` в `osquery_enrich.lua` декодирует обратно для `osquery.exit_code` (в общем cols→osquery.* loop) и `process.exit_code` (в `bpf_processes` блоке).
+
+**AF_UNIX/AF_NETLINK/AF_PACKET в bpf_sockets (QA-03):** для non-IP families enrich override'ит `event.category` из `network` (QUERY_META default) в `process`. Заполнение ECS `network.*` полей пропускается (нет IP/port). `event.action=socket_<syscall>_nonip` (отдельно от `socket_<syscall>` для AF_INET/AF_INET6).
 
 ### Профили osquery и shell_history (P2-02)
 
