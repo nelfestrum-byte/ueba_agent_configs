@@ -112,53 +112,19 @@ curl -sf http://localhost:9600/_node/stats | python3 -m json.tool | grep -A2 '"e
 
 ### 2. Агенты (auditd + fluent-bit + osquery)
 
-**Первоначальная настройка:**
+Полная инструкция по деплою агентов: [agents/README.md](agents/README.md).
+
+**Быстрый старт:**
 
 ```bash
 cd agents/deploy
 cp inventory.ini.example inventory.ini
 cp group_vars/all.yml.example group_vars/all.yml
-```
-
-`group_vars/all.yml`:
-```yaml
-logstash_security_host: 10.0.0.5   # UEBA Logstash (порты 5045/5047)
-logstash_common_host:   10.0.0.10  # Клиентский Logstash (порт 5044) — нужен если base_stack непустой
-base_stack: []                   # [] = pure UEBA; [freeipa, docker_events, suricata, waf] — FreeIPA-хост и т.п.
-osquery_version: "5.23.0"
-fluent_bit_version: "5.x.x"
-```
-
-Для docker-хостов (BPF backend) создать `group_vars/docker_hosts.yml`:
-```yaml
-osquery_bpf_events_enabled: true
-```
-
-Для хостов с клиентскими источниками используются готовые group_vars:
-- `group_vars/freeipa_hosts.yml` — FreeIPA + docker + suricata + waf
-- `group_vars/keycloak_hosts.yml` — Keycloak container logs
-- `group_vars/docker_event_hosts.yml` — Docker events + suricata + waf
-
-**Подготовка пакетов (офлайн):**
-```powershell
-.\agents\deploy\fetch-packages\fetch.ps1
-```
-
-**Деплой:**
-```bash
-cd agents/deploy
+# Заполнить logstash_security_host и при необходимости logstash_common_host
 ansible-playbook agents-deploy.yml --ask-become-pass
 ```
 
-Плейбук устанавливает auditd, fluent-bit, osquery; раскладывает конфиги и Lua-скрипты; запускает сервисы.
-
-**Проверка на агенте:**
-```bash
-systemctl status auditd fluent-bit osqueryd
-
-# Метрики fluent-bit (pipeline health, состояние Lua-скриптов):
-curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
-```
+Поддерживаемые группы хостов: `pure_ueba`, `docker_hosts` (BPF backend), `workstations`, `freeipa_hosts`, `keycloak_hosts`, `docker_event_hosts`. Офлайн-установка через `fetch-packages/fetch.ps1`.
 
 ---
 

@@ -1,0 +1,19 @@
+# =============================================================================
+# Три независимых пайплайна. Каждый слушает свои порты и пишет в свои индексы.
+#
+# ueba-security  — UEBA: Beats 5044, fluent-bit TCP 5045/5047
+# data-ingest    — Generic: JSON TCP 5048, syslog UDP 5514
+# eltex          — Eltex syslog UDP 5140 + SNMP polling
+# =============================================================================
+
+- pipeline.id: ueba-security
+  path.config: "/usr/share/logstash/pipeline/ueba-security.conf"
+  pipeline.workers: 2
+
+- pipeline.id: data-ingest
+  path.config: "/usr/share/logstash/pipeline/data-ingest.conf"
+  pipeline.workers: 1
+
+- pipeline.id: eltex
+  path.config: "/usr/share/logstash/pipeline/eltex.conf"
+  pipeline.workers: 1

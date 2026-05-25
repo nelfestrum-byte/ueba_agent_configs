@@ -1,0 +1,73 @@
+version: "3.8"
+
+# =============================================================================
+# Docker Swarm stack — объединённый Logstash
+#
+# Деплой:
+#   cp .env.example .env && vim .env          # заполнить переменные
+#   docker build -t logstash-custom:8.9.0 .   # собрать образ с SNMP-плагином
+#   docker stack deploy -c docker-compose.yml logstash
+#
+# Порты:
+#   5044  — generic JSON TCP / fluent-bit client-stack (data_*)
+#   5045  — fluent-bit: auditd (TCP JSON)
+#   5047  — fluent-bit: osquery (TCP JSON)
+#   5514  — syslog UDP
+#   5140  — Eltex syslog UDP
+#   9600  — Logstash API (мониторинг)
+#
+# Структура каталога на хосте (рядом с docker-compose.yml):
+#   ./config/logstash.yml
+#   ./config/pipelines.yml
+#   ./pipeline/*.conf
+#   ./patterns/eltex-pattern
+#   ./mibs/*.dic
+#   ./certs/             (опц., если OPENSEARCH_SSL=true)
+# =============================================================================
+
+networks:
+  logstash-net:
+    driver: overlay
+
+volumes:
+  logstash-data:
+
+services:
+  logstash:
+    image: logstash-custom:8.9.0
+    env_file:
+      - .env
+    volumes:
+      - logstash-data:/usr/share/logstash/data
+      - ./pipeline:/usr/share/logstash/pipeline:ro
+      - ./config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./config/pipelines.yml:/usr/share/logstash/config/pipelines.yml:ro
+      - ./patterns:/usr/share/logstash/patterns:ro
+      - ./mibs:/usr/share/logstash/mibs:ro
+      - ./certs:/usr/share/logstash/config/certs:ro
+    ports:
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5044:5044"     # generic JSON TCP / fluent-bit client-stack
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5045:5045"     # fluent-bit auditd
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5047:5047"     # fluent-bit osquery
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5514:5514/udp" # syslog UDP
+      - "${LOGSTASH_BIND_ADDR:-0.0.0.0}:5140:5140/udp" # Eltex syslog UDP
+      - "127.0.0.1:9600:9600"                          # Logstash API (только localhost)
+    environment:
+      - "LS_JAVA_OPTS=${LS_JAVA_OPTS:--Xms1g -Xmx1g}"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      resources:
+        limits:
+          memory: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9600/_node/stats > /dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks:
+      - logstash-net
