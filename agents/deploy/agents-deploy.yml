@@ -1,4 +1,4 @@
-﻿---
+---
 # Развертывание UEBA-агентов: auditd + fluent-bit + osquery (Debian/Ubuntu)
 #
 # Стек сбора audit-событий:
