@@ -1,0 +1,8 @@
+---
+# FreeIPA-хост: полный клиентский стек
+# KDC + httpd + 389DS + Dogtag CA + BIND DNS + SSSD + docker + osquery_client + suricata + waf
+client_stack:
+  - freeipa
+  - docker_events
+  - suricata
+  - waf

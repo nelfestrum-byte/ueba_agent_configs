@@ -175,8 +175,8 @@
     # ── 5. fluent-bit — конфигурация ──────────────────────────────────────────
 
     - name: Развернуть fluent-bit.conf
-      ansible.builtin.copy:
-        src: ../configs/fluent-bit/fluent-bit.conf
+      ansible.builtin.template:
+        src: ../configs/fluent-bit/fluent-bit.conf.j2
         dest: /etc/fluent-bit/fluent-bit.conf
         owner: root
         group: root
@@ -184,8 +184,8 @@
       notify: restart fluent-bit
 
     - name: Развернуть parsers.conf
-      ansible.builtin.copy:
-        src: ../configs/fluent-bit/parsers.conf
+      ansible.builtin.template:
+        src: ../configs/fluent-bit/parsers.conf.j2
         dest: /etc/fluent-bit/parsers.conf
         owner: root
         group: root
@@ -226,6 +226,38 @@
         owner: root
         group: root
         mode: "0644"
+      notify: restart fluent-bit
+
+    - name: Развернуть Lua-скрипт remove_commas.lua (keycloak pipeline)
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/remove_commas.lua
+        dest: /etc/fluent-bit/scripts/remove_commas.lua
+        owner: root
+        group: root
+        mode: "0644"
+      when: "'keycloak' in client_stack | default([])"
+      notify: restart fluent-bit
+
+    - name: Развернуть Lua-скрипт freeipa.lua (freeipa pipeline)
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/freeipa.lua
+        dest: /etc/fluent-bit/scripts/freeipa.lua
+        owner: root
+        group: root
+        mode: "0644"
+      when: "'freeipa' in client_stack | default([])"
+      notify: restart fluent-bit
+
+    - name: Развернуть Lua-скрипт docker_events.lua (docker_events pipeline)
+      ansible.builtin.copy:
+        src: ../configs/fluent-bit/scripts/docker_events.lua
+        dest: /etc/fluent-bit/scripts/docker_events.lua
+        owner: root
+        group: root
+        mode: "0644"
+      when: >-
+        'docker_events' in client_stack | default([]) or
+        'freeipa' in client_stack | default([])
       notify: restart fluent-bit
 
     - name: Создать /etc/default/fluent-bit с переменными окружения

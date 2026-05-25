@@ -3,8 +3,49 @@
 # Переменные развертывания UEBA-агентов
 # =============================================================================
 
-# Адрес Logstash (IP или hostname) — порт задаётся в fluent-bit.conf
-logstash_host: logstash.example.local
+# =============================================================================
+# Logstash — два эндпоинта
+# =============================================================================
+#
+# logstash_security_host — наш Logstash (UEBA):
+#   auditd  → TCP 5045 → fluent-audit-*
+#   osquery → TCP 5047 → fluent-osquery-*
+#
+# logstash_common_host — клиентский Logstash (используется только если
+#   client_stack непустой):
+#   docker/freeipa/keycloak/... → TCP 5044 → data_*
+#
+logstash_security_host: logstash-security.example.local
+logstash_common_host:   logstash-common.example.local
+logstash_common_port:   5044
+
+# =============================================================================
+# Клиентский pipeline (интеграция)
+# =============================================================================
+#
+# client_stack: список pipeline-ов клиента, которые добавляются к security-сбору.
+# Возможные значения: freeipa, keycloak, docker_events, suricata, waf
+#
+# Примеры:
+#   client_stack: []                                      — pure UEBA (без клиентских pipeline-ов)
+#   client_stack: [freeipa, docker_events, suricata, waf] — FreeIPA-хост
+#   client_stack: [keycloak]                              — Keycloak-хост
+#   client_stack: [docker_events, suricata, waf]          — Docker-хост
+#
+# Переопределяется через group_vars/freeipa_hosts.yml, keycloak_hosts.yml и т.д.
+#
+client_stack: []
+
+# Порт forward-input для Docker container logs (logfmt driver → fluent-bit)
+fluent_forward_port: 24224
+
+# Путь к Docker-сокету
+docker_socket: /var/run/docker.sock
+
+# Пути к логам клиентских сервисов (переопределяются per-host при необходимости)
+suricata_log_path:  /opt/suricata/logs/eve.json
+waf_log_path:       /opt/nginx/logs/modsecurity.log
+freeipa_log_base:   /var/lib/ipa-data/var/log
 
 # =============================================================================
 # Режим установки пакетов
@@ -13,65 +54,42 @@ logstash_host: logstash.example.local
 # use_local_packages: false  — онлайн: пакеты скачиваются из официальных репо
 # use_local_packages: true   — офлайн: .deb берутся из agents/deploy/files/
 #
-# Офлайн-подготовка:
-#   1. cd agents/deploy/fetch-packages && .\fetch.ps1
-#      (скачивает пакеты и показывает имена файлов для переменных ниже)
-#   2. Скопировать all.yml.example → all.yml, заполнить переменные
-
 use_local_packages: true
 
 # =============================================================================
 # Версии пакетов и имена .deb файлов (для use_local_packages: true)
 # =============================================================================
 
-# fluent-bit — отдельная схема именования: fluent-bit_{version}_amd64.deb
-fluent_bit_version:  "5.0.5"
+fluent_bit_version:   "5.0.5"
 fluent_bit_local_deb: "fluent-bit_{{ fluent_bit_version }}_amd64.deb"
 
-# osquery — отдельная схема именования: osquery_{version}-1.linux_{arch}.deb
 osquery_version:   "5.23.0"
 osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
 
 # =============================================================================
-# Версия конфигурации агентов (fluent-bit + Lua-скрипты)
+# Версия конфигурации агентов
 # =============================================================================
 #
-# Проставляется во все события как labels.config_version (ECS labels namespace).
-# Меняйте при любых правках fluent-bit.conf, auditd_enrich.lua, osquery_enrich.lua.
-# Формат: MAJOR.MINOR.PATCH — MAJOR при breaking changes схемы,
-#          MINOR при новых полях, PATCH при bugfix.
+# Проставляется во все security-события как labels.config_version.
+# Меняйте при правках fluent-bit.conf.j2, auditd_enrich.lua, osquery_enrich.lua.
 #
 fluent_config_version: "0.9"
 
 # =============================================================================
-# URL репозиториев (используются только при use_local_packages: false)
+# URL репозиториев (только при use_local_packages: false)
 # =============================================================================
-#
-# Для изолированных сетей замените на внутреннее зеркало:
-#   osquery_apt_repo_url: "http://mirror.example.local/osquery/deb"
 
 osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
 osquery_apt_repo_url: "https://pkg.osquery.io/deb"
 
 # =============================================================================
-# osquery BPF backend toggle (P2-01)
+# osquery BPF backend (P2-01)
 # =============================================================================
 #
-# Дефолт: выключено — workstations и generic servers не получают overhead.
-# Переопределяется на уровне группы: скопировать docker_hosts.yml.example
-# → group_vars/docker_hosts.yml и установить true.
+# Дефолт: выключено. Переопределяется через group_vars/docker_hosts.yml.
+# Требования: ядро ≥ 5.10, /sys/kernel/btf/vmlinux, osquery ≥ 4.6.
 #
-# Требования на хостах с enabled=true:
-#   - ядро ≥ 5.10 (рекомендуется ≥ 5.15)
-#   - /sys/kernel/btf/vmlinux (CONFIG_DEBUG_INFO_BTF=y)
-#   - osquery ≥ 4.6
-#
-# Pre-flight Ansible-assert проверяет ядро и BTF перед раскаткой.
-
 osquery_bpf_events_enabled: false
-
-# Интервал scheduled BPF-запросов (bpf_process_events, bpf_socket_events), сек.
-# Рекомендуется: 10 (баланс latency/объём). Альтернативы: 5 (busy hosts), 30.
 osquery_bpf_interval: 10
 
 # =============================================================================
@@ -79,7 +97,6 @@ osquery_bpf_interval: 10
 # =============================================================================
 #
 # Значения: "server" (default), "workstation".
-# Переопределяется через group_vars/workstations.yml или per-host host_vars.
-# Workstation-профиль добавляет: chrome_extensions_diff, firefox_addons_diff.
-
+# Переопределяется через group_vars/workstations.yml или host_vars.
+#
 osquery_profile: server

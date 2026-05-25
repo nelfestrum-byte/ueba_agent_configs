@@ -1,0 +1,524 @@
+# /etc/fluent-bit/fluent-bit.conf
+#
+# Сгенерирован Ansible из fluent-bit.conf.j2
+#
+# Security-стек (всегда активен):
+#   auditd   → fluent-bit → Logstash TCP 5045 → fluent-audit-*
+#   osquery  → fluent-bit → Logstash TCP 5047 → fluent-osquery-*
+#
+{% if client_stack | default([]) | length > 0 %}
+# Клиентский стек ({{ client_stack | join(', ') }}):
+#   docker/freeipa/keycloak/... → fluent-bit → Logstash TCP {{ logstash_common_port | default(5044) }} → data_*
+#
+{% endif %}
+# Переменные окружения (/etc/default/fluent-bit):
+#   LOGSTASH_SECURITY_HOST — наш Logstash (5045/5047)
+{% if client_stack | default([]) | length > 0 %}
+#   LOGSTASH_COMMON_HOST   — клиентский Logstash ({{ logstash_common_port | default(5044) }})
+{% endif %}
+
+[SERVICE]
+    Flush                     5
+    Daemon                    Off
+    Log_Level                 info
+    Log_File                  /var/log/fluent-bit/fluent-bit.log
+    Parsers_File              /etc/fluent-bit/parsers.conf
+    HTTP_Server               On
+    HTTP_Listen               127.0.0.1
+    HTTP_Port                 2020
+    storage.path              /var/lib/fluent-bit/storage/
+    storage.sync              normal
+    storage.checksum          off
+    storage.backlog.mem_limit 50M
+    storage.metrics           On
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECURITY PIPELINE — auditd → Logstash TCP 5045 → fluent-audit-*
+# ══════════════════════════════════════════════════════════════════════════════
+
+[INPUT]
+    Name              tail
+    Tag               auditd.raw
+    Path              /var/log/audit/audit.log
+    Parser            auditd_line
+    DB                /var/lib/fluent-bit/auditd.db
+    DB.locking        true
+    Skip_Long_Lines   On
+    Refresh_Interval  5
+    Read_from_Head    false
+    Mem_Buf_Limit     32MB
+    storage.type      filesystem
+
+[FILTER]
+    Name    lua
+    Match   auditd.raw
+    script  /etc/fluent-bit/scripts/auditd_merge.lua
+    call    merge_auditd
+
+[FILTER]
+    Name    lua
+    Match   auditd.raw
+    script  /etc/fluent-bit/scripts/auditd_enrich.lua
+    call    enrich_ecs
+
+[FILTER]
+    Name    record_modifier
+    Match   auditd.*
+    Record  agent.name              fluent-bit
+    Record  agent.type              filebeat-compat
+    Record  data_stream.type        logs
+    Record  data_stream.dataset     auditd
+    Record  data_stream.namespace   security
+    Record  labels.config_version   ${FLUENT_CONFIG_VERSION}
+
+[FILTER]
+    Name    record_modifier
+    Match   auditd.*
+    Remove_key audit_type
+    Remove_key serial
+    Remove_key msg
+
+[OUTPUT]
+    Name              tcp
+    Match             auditd.*
+    Host              ${LOGSTASH_SECURITY_HOST}
+    Port              5045
+    Format            json_lines
+    Retry_Limit       10
+    storage.total_limit_size 1G
+    net.connect_timeout       10
+    net.keepalive             on
+    net.keepalive_idle_timeout 30
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECURITY PIPELINE — osquery → Logstash TCP 5047 → fluent-osquery-*
+# ══════════════════════════════════════════════════════════════════════════════
+
+[INPUT]
+    Name              tail
+    Tag               osquery.raw
+    Path              /var/log/osquery/osqueryd.results.log
+    Parser            json
+    DB                /var/lib/fluent-bit/osquery.db
+    DB.locking        true
+    Skip_Long_Lines   On
+    Refresh_Interval  5
+    Read_from_Head    false
+    Mem_Buf_Limit     16MB
+    storage.type      filesystem
+
+[FILTER]
+    Name    lua
+    Match   osquery.raw
+    script  /etc/fluent-bit/scripts/osquery_enrich.lua
+    call    enrich_osquery
+
+[FILTER]
+    Name    record_modifier
+    Match   osquery.*
+    Record  agent.name              fluent-bit
+    Record  agent.type              osquerybeat-compat
+    Record  data_stream.type        logs
+    Record  data_stream.dataset     osquery
+    Record  data_stream.namespace   security
+    Record  labels.config_version   ${FLUENT_CONFIG_VERSION}
+
+[OUTPUT]
+    Name              tcp
+    Match             osquery.*
+    Host              ${LOGSTASH_SECURITY_HOST}
+    Port              5047
+    Format            json_lines
+    Retry_Limit       10
+    storage.total_limit_size 512M
+    net.connect_timeout       10
+    net.keepalive             on
+    net.keepalive_idle_timeout 30
+
+{% if client_stack | default([]) | length > 0 %}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLIENT PIPELINE — {{ client_stack | join(', ') }}
+# → Logstash TCP {{ logstash_common_port | default(5044) }} → data_* indices
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── INPUTs ────────────────────────────────────────────────────────────────────
+
+{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[INPUT]
+    name             forward
+    storage.type     filesystem
+    Listen           0.0.0.0
+    Port             {{ fluent_forward_port | default(24224) }}
+
+{% endif %}
+{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[INPUT]
+    name             docker_events
+    storage.type     filesystem
+    tag              docker_events
+    parser           json
+    Unix_Path        {{ docker_socket | default('/var/run/docker.sock') }}
+
+{% endif %}
+{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[INPUT]
+    name              tail
+    storage.type      filesystem
+    path              /var/log/osquery/osqueryd.*.log
+    read_from_Head    true
+    parser            json
+    tag               osquery_json
+    DB                /var/lib/fluent-bit/osquery_client.db
+    DB.sync           full
+    DB.locking        true
+    DB.journal_mode   WAL
+
+{% endif %}
+{% if 'suricata' in client_stack or 'freeipa' in client_stack %}
+[INPUT]
+    name              tail
+    storage.type      filesystem
+    path              {{ suricata_log_path | default('/opt/suricata/logs/eve.json') }}
+    read_from_Head    true
+    parser            json
+    tag               suricata_json
+    DB                /var/lib/fluent-bit/suricata_client.db
+    DB.sync           full
+    DB.locking        true
+    DB.journal_mode   WAL
+
+{% endif %}
+{% if 'waf' in client_stack or 'freeipa' in client_stack %}
+[INPUT]
+    name              tail
+    storage.type      filesystem
+    path              {{ waf_log_path | default('/opt/nginx/logs/modsecurity.log') }}
+    read_from_Head    false
+    parser            json
+    tag               waf_json
+    DB                /var/lib/fluent-bit/waf_client.db
+    DB.sync           full
+    DB.locking        true
+    DB.journal_mode   WAL
+
+{% endif %}
+{% if 'freeipa' in client_stack %}
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.kdc
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/krb5kdc.log
+    Parser           ipa_kdc
+    DB               /var/lib/fluent-bit/freeipa_kdc.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.httpd.access
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/httpd/access_log
+    Parser           apache_access
+    DB               /var/lib/fluent-bit/freeipa_httpd_access.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.httpd.error
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/httpd/error_log
+    Parser           apache_error
+    DB               /var/lib/fluent-bit/freeipa_httpd_error.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.dirsrv.access
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/dirsrv/slapd-*/access
+    Parser           dirsrv_access
+    DB               /var/lib/fluent-bit/freeipa_dirsrv_access.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.dirsrv.error
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/dirsrv/slapd-*/errors
+    Parser           dirsrv_error
+    DB               /var/lib/fluent-bit/freeipa_dirsrv_error.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.dirsrv.audit
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/dirsrv/slapd-*/audit
+    Parser           dirsrv_audit
+    DB               /var/lib/fluent-bit/freeipa_dirsrv_audit.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.dirsrv.auditfail
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/dirsrv/slapd-*/auditfail
+    Parser           dirsrv_audit
+    DB               /var/lib/fluent-bit/freeipa_dirsrv_auditfail.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.dogtag
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/pki/pki-tomcat/ca/debug
+    Parser           dogtag
+    multiline.parser java_stacktrace
+    DB               /var/lib/fluent-bit/freeipa_dogtag.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.dns
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/named/*.log,{{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/named/data/named.run
+    Parser           bind_dns
+    DB               /var/lib/fluent-bit/freeipa_dns.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+[INPUT]
+    Name             tail
+    storage.type     filesystem
+    Tag              freeipa.sssd
+    Path             {{ freeipa_log_base | default('/var/lib/ipa-data/var/log') }}/sssd/*.log
+    Parser           sssd
+    DB               /var/lib/fluent-bit/freeipa_sssd.db
+    DB.sync          full
+    DB.locking       true
+    DB.journal_mode  WAL
+
+{% endif %}
+
+# ── FILTERs ───────────────────────────────────────────────────────────────────
+
+{% if 'freeipa' in client_stack %}
+[FILTER]
+    Name        modify
+    Match       freeipa.httpd.access
+    Rename      source_ip source.ip
+    Rename      user_name user.name
+    Rename      http_request_method http.request.method
+    Rename      url_path url.path
+    Rename      http_response_status_code http.response.status_code
+    Rename      http_response_body_bytes http.response.body.bytes
+
+[FILTER]
+    Name        modify
+    Match       freeipa.dirsrv.access
+    Rename      ldap_connection_id ldap.connection.id
+    Rename      ldap_operation_id ldap.operation.id
+
+[FILTER]
+    Name        modify
+    Match       freeipa.dns
+    Rename      dns_category dns.category
+
+[FILTER]
+    Name        modify
+    Match       freeipa.dirsrv.audit*
+    Rename      ldap_dn ldap.dn
+
+[FILTER]
+    Name             modify
+    Match            freeipa.kdc
+    Add              service.name kerberos
+
+[FILTER]
+    Name             modify
+    Match            freeipa.httpd.*
+    Add              service.name httpd
+
+[FILTER]
+    Name             modify
+    Match            freeipa.dirsrv.*
+    Add              service.name ldap
+
+[FILTER]
+    Name             modify
+    Match            freeipa.dns
+    Add              service.name dns
+
+[FILTER]
+    Name             modify
+    Match            freeipa.dogtag
+    Add              service.name dogtag
+
+[FILTER]
+    Name             modify
+    Match            freeipa.sssd
+    Add              service.name sssd
+
+[FILTER]
+    Name             lua
+    Match            freeipa.*
+    script           /etc/fluent-bit/scripts/freeipa.lua
+    call             normalize
+
+{% endif %}
+{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    grep
+    Match   docker.*
+    Regex   log .+
+
+[FILTER]
+    name                  multiline
+    match                 docker.*
+    multiline.key_content log
+    mode                  partial_message
+
+[FILTER]
+    Name         parser
+    Parser       docker
+    Match        docker.*
+    Key_Name     log
+    Reserve_Data true
+    Preserve_Key false
+
+{% endif %}
+{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    lua
+    Match   docker_events
+    script  /etc/fluent-bit/scripts/docker_events.lua
+    call    sanitize_attributes
+
+{% endif %}
+{% if 'keycloak' in client_stack %}
+[FILTER]
+    Name    modify
+    Match   docker.*
+    Rename  log.logger log_logger
+
+[FILTER]
+    Name    rewrite_tag
+    Match   docker.*
+    Rule    $log_logger "org.keycloak.events" keycloak.events false
+
+[FILTER]
+    Name   lua
+    Match  keycloak.events
+    script /etc/fluent-bit/scripts/remove_commas.lua
+    call   remove_commas
+
+[FILTER]
+    Name         parser
+    Parser       logfmt
+    Match        keycloak.events
+    Key_Name     message
+    Reserve_Data true
+    Preserve_Key false
+
+[FILTER]
+    Name    modify
+    Match   keycloak.events
+    Rename  log_logger logger
+
+[FILTER]
+    Name    rewrite_tag
+    Match   keycloak.events
+    Rule    $logger "org.keycloak.events" docker.keycloak_events false
+
+{% endif %}
+{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    modify
+    Match   docker.*
+    Rename  log unparsed_log
+
+{% endif %}
+
+# ── Метаданные: fqdn и source_type (только клиентские теги) ──────────────────
+#
+# Match_Regex охватывает все клиентские теги, исключая наши auditd.* / osquery.*
+#
+[FILTER]
+    Name        record_modifier
+    Match_Regex ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$)
+    Record      fqdn ${HOSTNAME}
+
+{% if 'freeipa' in client_stack %}
+[FILTER]
+    Name    record_modifier
+    Match   freeipa.*
+    Record  source_type freeipa
+
+{% endif %}
+{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    record_modifier
+    Match   docker.*
+    Record  source_type docker_container
+
+{% endif %}
+{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    record_modifier
+    Match   docker_events
+    Record  source_type docker_events
+
+[FILTER]
+    Name    record_modifier
+    Match   osquery_json
+    Record  source_type osquery
+
+{% endif %}
+{% if 'suricata' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    record_modifier
+    Match   suricata_json
+    Record  source_type suricata
+
+{% endif %}
+{% if 'waf' in client_stack or 'freeipa' in client_stack %}
+[FILTER]
+    Name    record_modifier
+    Match   waf_json
+    Record  source_type modsecurity
+
+{% endif %}
+
+# ── OUTPUT → Logstash Common ──────────────────────────────────────────────────
+#
+# Match_Regex: все клиентские теги, НЕ auditd.* и НЕ osquery.*
+#
+[OUTPUT]
+    Name           tcp
+    Match_Regex    ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$)
+    Host           ${LOGSTASH_COMMON_HOST}
+    Port           {{ logstash_common_port | default(5044) }}
+    Format         json_lines
+    Retry_Limit    5
+    net.keepalive  on
+
+{% endif %}

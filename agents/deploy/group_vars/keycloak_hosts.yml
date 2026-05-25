@@ -1,0 +1,4 @@
+---
+# Keycloak-хост: Docker container logs (forward input) с keycloak event filter
+client_stack:
+  - keycloak
