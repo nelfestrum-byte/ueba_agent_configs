@@ -1,4 +1,4 @@
-# UEBA — стенд сбора событий безопасности
+﻿# UEBA — стенд сбора событий безопасности
 
 **Версия:** 0.9 · [Release Notes](docs/RELEASE_NOTES_0.9.md)
 
@@ -27,7 +27,7 @@ Linux-хост
   │                     └── TCP 5047 ──────────────────────────────────┤
   │                                                                     │
   └── [опц.] клиентские источники (freeipa / keycloak / docker / ...)  │
-        └── fluent-bit (тот же процесс, client_stack в group_vars)     │
+        └── fluent-bit (тот же процесс, base_stack в group_vars)     │
               └── TCP 5044 → Logstash-клиента → data_* (без изменений) │
                                                                         │
                                                               Logstash (UEBA)
@@ -123,8 +123,8 @@ cp group_vars/all.yml.example group_vars/all.yml
 `group_vars/all.yml`:
 ```yaml
 logstash_security_host: 10.0.0.5   # UEBA Logstash (порты 5045/5047)
-logstash_common_host:   10.0.0.10  # Клиентский Logstash (порт 5044) — нужен если client_stack непустой
-client_stack: []                   # [] = pure UEBA; [freeipa, docker_events, suricata, waf] — FreeIPA-хост и т.п.
+logstash_common_host:   10.0.0.10  # Клиентский Logstash (порт 5044) — нужен если base_stack непустой
+base_stack: []                   # [] = pure UEBA; [freeipa, docker_events, suricata, waf] — FreeIPA-хост и т.п.
 osquery_version: "5.23.0"
 fluent_bit_version: "5.x.x"
 ```

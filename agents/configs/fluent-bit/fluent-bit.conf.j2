@@ -1,4 +1,4 @@
-# /etc/fluent-bit/fluent-bit.conf
+﻿# /etc/fluent-bit/fluent-bit.conf
 #
 # Сгенерирован Ansible из fluent-bit.conf.j2
 #
@@ -6,14 +6,14 @@
 #   auditd   → fluent-bit → Logstash TCP 5045 → fluent-audit-*
 #   osquery  → fluent-bit → Logstash TCP 5047 → fluent-osquery-*
 #
-{% if client_stack | default([]) | length > 0 %}
-# Базовый стек ({{ client_stack | join(', ') }}):
+{% if base_stack | default([]) | length > 0 %}
+# Базовый стек ({{ base_stack | join(', ') }}):
 #   docker/freeipa/keycloak/... → fluent-bit → Logstash TCP {{ logstash_common_port | default(5044) }} → data_*
 #
 {% endif %}
 # Переменные окружения (/etc/default/fluent-bit):
 #   LOGSTASH_SECURITY_HOST — наш Logstash (5045/5047)
-{% if client_stack | default([]) | length > 0 %}
+{% if base_stack | default([]) | length > 0 %}
 #   LOGSTASH_COMMON_HOST   — общий Logstash ({{ logstash_common_port | default(5044) }})
 {% endif %}
 
@@ -137,16 +137,16 @@
     net.keepalive             on
     net.keepalive_idle_timeout 30
 
-{% if client_stack | default([]) | length > 0 %}
+{% if base_stack | default([]) | length > 0 %}
 
 # ══════════════════════════════════════════════════════════════════════════════
-# БАЗОВЫЙ PIPELINE — {{ client_stack | join(', ') }}
+# БАЗОВЫЙ PIPELINE — {{ base_stack | join(', ') }}
 # → Logstash TCP {{ logstash_common_port | default(5044) }} → data_* indices
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── INPUTs ────────────────────────────────────────────────────────────────────
 
-{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [INPUT]
     name             forward
     storage.type     filesystem
@@ -154,7 +154,7 @@
     Port             {{ fluent_forward_port | default(24224) }}
 
 {% endif %}
-{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [INPUT]
     name             docker_events
     storage.type     filesystem
@@ -163,7 +163,7 @@
     Unix_Path        {{ docker_socket | default('/var/run/docker.sock') }}
 
 {% endif %}
-{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [INPUT]
     name              tail
     storage.type      filesystem
@@ -177,7 +177,7 @@
     DB.journal_mode   WAL
 
 {% endif %}
-{% if 'suricata' in client_stack or 'freeipa' in client_stack %}
+{% if 'suricata' in base_stack or 'freeipa' in base_stack %}
 [INPUT]
     name              tail
     storage.type      filesystem
@@ -191,7 +191,7 @@
     DB.journal_mode   WAL
 
 {% endif %}
-{% if 'waf' in client_stack or 'freeipa' in client_stack %}
+{% if 'waf' in base_stack or 'freeipa' in base_stack %}
 [INPUT]
     name              tail
     storage.type      filesystem
@@ -205,7 +205,7 @@
     DB.journal_mode   WAL
 
 {% endif %}
-{% if 'freeipa' in client_stack %}
+{% if 'freeipa' in base_stack %}
 [INPUT]
     Name             tail
     storage.type     filesystem
@@ -321,7 +321,7 @@
 
 # ── FILTERs ───────────────────────────────────────────────────────────────────
 
-{% if 'freeipa' in client_stack %}
+{% if 'freeipa' in base_stack %}
 [FILTER]
     Name        modify
     Match       freeipa.httpd.access
@@ -385,7 +385,7 @@
     call             normalize
 
 {% endif %}
-{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    grep
     Match   docker.*
@@ -406,7 +406,7 @@
     Preserve_Key false
 
 {% endif %}
-{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    lua
     Match   docker_events
@@ -414,7 +414,7 @@
     call    sanitize_attributes
 
 {% endif %}
-{% if 'keycloak' in client_stack %}
+{% if 'keycloak' in base_stack %}
 [FILTER]
     Name    modify
     Match   docker.*
@@ -450,7 +450,7 @@
     Rule    $logger "org.keycloak.events" docker.keycloak_events false
 
 {% endif %}
-{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    modify
     Match   docker.*
@@ -467,21 +467,21 @@
     Match_Regex ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$)
     Record      fqdn ${HOSTNAME}
 
-{% if 'freeipa' in client_stack %}
+{% if 'freeipa' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   freeipa.*
     Record  source_type freeipa
 
 {% endif %}
-{% if 'keycloak' in client_stack or 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   docker.*
     Record  source_type docker_container
 
 {% endif %}
-{% if 'docker_events' in client_stack or 'freeipa' in client_stack %}
+{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   docker_events
@@ -493,14 +493,14 @@
     Record  source_type osquery
 
 {% endif %}
-{% if 'suricata' in client_stack or 'freeipa' in client_stack %}
+{% if 'suricata' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   suricata_json
     Record  source_type suricata
 
 {% endif %}
-{% if 'waf' in client_stack or 'freeipa' in client_stack %}
+{% if 'waf' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   waf_json

@@ -1,4 +1,4 @@
-# CLAUDE.md — UEBA проект
+﻿# CLAUDE.md — UEBA проект
 Мы разрабатываем конфигурации источников для сбора данных.
 Данные будут использоваться для UEBA системы на основе скоринга.
 Собираемые данные должны поступать нормализованными по ECS 8.x.
@@ -27,7 +27,7 @@
 | Сервис | Роль |
 |--------|------|
 | **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
-| **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*`<br>3) [опц.] Клиентские источники (freeipa/keycloak/docker/suricata/waf) → TCP 5044 → `data_*` на клиентском Logstash. Включаются через `client_stack` в group_vars. Конфиг генерируется из `fluent-bit.conf.j2`. |
+| **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*`<br>3) [опц.] Клиентские источники (freeipa/keycloak/docker/suricata/waf) → TCP 5044 → `data_*` на клиентском Logstash. Включаются через `base_stack` в group_vars. Конфиг генерируется из `fluent-bit.conf.j2`. |
 | **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи.<br>**На docker-хостах** (группа `[docker_hosts]`, `osquery_bpf_events_enabled=true`, ядро ≥5.10): BPF backend → `bpf_process_events`, `bpf_socket_events` — container-aware видимость с нативным `container.id`; `docker_containers` diff для инвентаря контейнеров. |
 
 **auditbeat** не используется — конфликтует с auditd за audit netlink-сокет.
@@ -58,8 +58,8 @@ ueba-stand/
 │   │   ├── auditd/
 │   │   │   └── audit.rules              — правила auditd для UEBA (execve, network, identity...)
 │   │   ├── fluent-bit/
-│   │   │   ├── fluent-bit.conf.j2       — Jinja2-шаблон: security + клиентские pipeline-ы (по client_stack)
-│   │   │   ├── parsers.conf.j2          — Jinja2-шаблон: auditd-парсеры + FreeIPA-парсеры (по client_stack)
+│   │   │   ├── fluent-bit.conf.j2       — Jinja2-шаблон: security + клиентские pipeline-ы (по base_stack)
+│   │   │   ├── parsers.conf.j2          — Jinja2-шаблон: auditd-парсеры + FreeIPA-парсеры (по base_stack)
 │   │   │   ├── fluent-bit.env.j2        — Ansible template: /etc/default/fluent-bit
 │   │   │   └── scripts/
 │   │   │       ├── auditd_merge.lua     — объединение событий по serial number
@@ -74,11 +74,11 @@ ueba-stand/
 │       ├── agents-deploy-legacy.yml     — архив старого плейбука
 │       ├── ansible.cfg
 │       ├── inventory.ini
-│       ├── group_vars/all.yml              — logstash_security_host, logstash_common_host, client_stack, версии пакетов
+│       ├── group_vars/all.yml              — logstash_security_host, logstash_common_host, base_stack, версии пакетов
 │       ├── group_vars/all.yml.example     — шаблон переменных
-│       ├── group_vars/freeipa_hosts.yml   — client_stack: [freeipa, docker_events, suricata, waf]
-│       ├── group_vars/keycloak_hosts.yml  — client_stack: [keycloak]
-│       ├── group_vars/docker_event_hosts.yml — client_stack: [docker_events, suricata, waf]
+│       ├── group_vars/freeipa_hosts.yml   — base_stack: [freeipa, docker_events, suricata, waf]
+│       ├── group_vars/keycloak_hosts.yml  — base_stack: [keycloak]
+│       ├── group_vars/docker_event_hosts.yml — base_stack: [docker_events, suricata, waf]
 │       └── fetch-packages/              — скачать .deb для офлайн-деплоя
 │           ├── fetch.ps1
 │           └── Dockerfile
@@ -105,15 +105,15 @@ ueba-stand/
 | **Деплой Logstash** | `logstash/deploy/logstash-deploy.yml` | Ansible: docker pull + copy + up |
 | **Переменные Logstash** | `logstash/deploy/group_vars/all.yml` | opensearch_url, SSL, image, bind_addr |
 | **Правила auditd** | `agents/configs/auditd/audit.rules` | execve, network, priv_escalation, file watch; Tier A (P1-01): anti-forensics, persistence, container escape; Tier B: env/mac/pkg/firewall/dns — cherry-pick из Neo23x0/auditd |
-| **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf.j2` | Jinja2-шаблон: security pipelines (всегда) + клиентские (по `client_stack`). `${LOGSTASH_SECURITY_HOST}` → 5045/5047; `${LOGSTASH_COMMON_HOST}` → 5044. Match_Regex изолирует теги. |
-| **Parsers fluent-bit** | `agents/configs/fluent-bit/parsers.conf.j2` | Jinja2-шаблон: auditd-парсеры (всегда) + docker/logfmt (client_stack непустой) + FreeIPA-парсеры (freeipa в стеке) |
+| **Конфиг fluent-bit** | `agents/configs/fluent-bit/fluent-bit.conf.j2` | Jinja2-шаблон: security pipelines (всегда) + клиентские (по `base_stack`). `${LOGSTASH_SECURITY_HOST}` → 5045/5047; `${LOGSTASH_COMMON_HOST}` → 5044. Match_Regex изолирует теги. |
+| **Parsers fluent-bit** | `agents/configs/fluent-bit/parsers.conf.j2` | Jinja2-шаблон: auditd-парсеры (всегда) + docker/logfmt (base_stack непустой) + FreeIPA-парсеры (freeipa в стеке) |
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id`; обработчики USER_*/CRED_*/SERVICE_START/SERVICE_STOP и реклассификация AF_UNIX/AF_NETLINK/AF_PACKET сокетов (QA-02) |
 | **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd во всех источниках включая `bpf_process_events` (QA-FIX-12: epoch start_time из `/proc/<pid>/stat` вместо kernel monotonic ntime); QA-03: `cgroup_ns_cache` (osquery.cid → container.id) + AF_NETLINK/AF_UNIX → category=process + `normalize_int64` для BPF exit_code + `uid_to_name` для kernel_keys + `container_observed_*` action |
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
-| **Переменные агентов** | `agents/deploy/group_vars/all.yml` | `logstash_security_host`, `logstash_common_host`, `client_stack`, версии .deb, osquery_profile |
-| **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_event_hosts.yml` | Переопределяют `client_stack` для соответствующих групп хостов |
+| **Переменные агентов** | `agents/deploy/group_vars/all.yml` | `logstash_security_host`, `logstash_common_host`, `base_stack`, версии .deb, osquery_profile |
+| **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_event_hosts.yml` | Переопределяют `base_stack` для соответствующих групп хостов |
 | **Index templates** | `opensearch/templates/*.json` | Маппинги ECS 8.11 v2.0 для всех индексов; применяются через logstash-deploy.yml |
 | **Release Notes** | `docs/RELEASE_NOTES_0.9.md` | Human-readable описание v0.9 |
 
@@ -123,7 +123,7 @@ ueba-stand/
 |--------|---------|
 | `fluent-audit-YYYY.MM.dd` | fluent-bit: auditd ECS-события (execve, sudo, auth, network, file) — TCP 5045 |
 | `fluent-osquery-YYYY.MM.dd` | fluent-bit: osquery diff-события ECS + osquery.* namespace — TCP 5047 |
-| `data_{source_type}` | fluent-bit: клиентские источники (docker, freeipa, suricata, modsecurity, osquery, docker_events) → TCP 5044 → клиентский Logstash. Только при непустом `client_stack`. |
+| `data_{source_type}` | fluent-bit: клиентские источники (docker, freeipa, suricata, modsecurity, osquery, docker_events) → TCP 5044 → клиентский Logstash. Только при непустом `base_stack`. |
 
 ## Инструкции по сокращению токенов
 
@@ -164,7 +164,7 @@ ueba-stand/
 
 ### Добавить новый тип хоста с клиентским pipeline
 ```
-1. Создать group_vars/<group_name>.yml с нужным client_stack
+1. Создать group_vars/<group_name>.yml с нужным base_stack
 2. Добавить группу в inventory.ini (дочернюю к [ueba_agents])
 3. Убедиться что logstash_common_host задан в all.yml
 4. ansible-playbook agents-deploy.yml --ask-become-pass

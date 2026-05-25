@@ -1,4 +1,4 @@
-# README_FOR_AI — Справочник по данным для AI-агентов
+﻿# README_FOR_AI — Справочник по данным для AI-агентов
 
 Этот документ предназначен для AI-агентов, использующих данный стенд как основу
 для надпроектов — прежде всего **UEBA-системы со скорингом поведения пользователей и сущностей**.
@@ -40,9 +40,9 @@ osquery (ECS)    fluent-bit → TCP 5047            fluent-osquery-YYYY.MM.dd
 
 Security-события (auditd, osquery ECS) проходят через **UEBA Logstash** (маршрутизация + type-cast) до записи в OpenSearch.
 
-Клиентские источники (опциональные, управляются переменной `client_stack` в Ansible group_vars) проходят через **клиентский Logstash** (порт 5044). Индексы клиента определяются полем `source_type` — `data_{source_type}`. Логика клиента **не затрагивается**: fluent-bit шлёт события на оба Logstash в одном процессе, routing по `Match_Regex` исключает пересечение индексов.
+Клиентские источники (опциональные, управляются переменной `base_stack` в Ansible group_vars) проходят через **клиентский Logstash** (порт 5044). Индексы клиента определяются полем `source_type` — `data_{source_type}`. Логика клиента **не затрагивается**: fluent-bit шлёт события на оба Logstash в одном процессе, routing по `Match_Regex` исключает пересечение индексов.
 
-Переменные окружения на хосте: `LOGSTASH_SECURITY_HOST` (наш) и `LOGSTASH_COMMON_HOST` (клиентский, только если `client_stack` непустой).
+Переменные окружения на хосте: `LOGSTASH_SECURITY_HOST` (наш) и `LOGSTASH_COMMON_HOST` (клиентский, только если `base_stack` непустой).
 
 ---
 
@@ -672,13 +672,13 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | Файл | Зачем |
 |------|-------|
 | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон конфига osquery. Содержит полный список запросов и их SQL — источник schema. BPF-блоки (`bpf_processes`, `bpf_sockets`, `docker_containers`) включаются при `osquery_bpf_events_enabled: true` (группа `[docker_hosts]`). |
-| `agents/configs/fluent-bit/fluent-bit.conf.j2` | Jinja2-шаблон главного конфига fluent-bit. Security-пайплайны (auditd/osquery) — всегда; клиентские пайплайны — условно по `client_stack`. Использует `${LOGSTASH_SECURITY_HOST}` (5045/5047) и `${LOGSTASH_COMMON_HOST}` (5044). |
-| `agents/configs/fluent-bit/parsers.conf.j2` | Jinja2-шаблон parsers.conf. Всегда: auditd-парсеры. При `client_stack` непустом: docker/logfmt. При `'freeipa' in client_stack`: FreeIPA-специфичные парсеры (ipa_kdc, dirsrv_*, dogtag, bind_dns, sssd, java_stacktrace). |
+| `agents/configs/fluent-bit/fluent-bit.conf.j2` | Jinja2-шаблон главного конфига fluent-bit. Security-пайплайны (auditd/osquery) — всегда; клиентские пайплайны — условно по `base_stack`. Использует `${LOGSTASH_SECURITY_HOST}` (5045/5047) и `${LOGSTASH_COMMON_HOST}` (5044). |
+| `agents/configs/fluent-bit/parsers.conf.j2` | Jinja2-шаблон parsers.conf. Всегда: auditd-парсеры. При `base_stack` непустом: docker/logfmt. При `'freeipa' in base_stack`: FreeIPA-специфичные парсеры (ipa_kdc, dirsrv_*, dogtag, bind_dns, sssd, java_stacktrace). |
 | `agents/configs/fluent-bit/scripts/proc_common.lua` | Общая библиотека (shared module): `short_id()` (FNV-1a hash), кэши `pid→start_time/name/cmdline`, `read_proc_start()`, `get_sessionid()`, `make_session_id()`, `to_iso()`. Импортируется всеми тремя enrich-скриптами — изменение меняет behavior во всех пайплайнах. |
 | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | Маппинг запросов → ECS категории/действия; table `QUERY_META` — истина о категоризации всех osquery событий |
 | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-нормализация auditd, syscall→action маппинг; таблица `SYSCALLS` — истина о поддерживаемых syscall номерах |
-| `agents/configs/fluent-bit/scripts/freeipa.lua` | Нормализация FreeIPA событий: LDAP bind/fail, Kerberos TGT, PKI, DNS, SSSD → `event.category/action/outcome`. Только при `'freeipa' in client_stack`. |
-| `agents/configs/fluent-bit/scripts/docker_events.lua` | Санитизация Docker Events API: замена `.` → `_` в ключах `Actor.Attributes`. При `'docker_events' in client_stack` или `'freeipa' in client_stack`. |
+| `agents/configs/fluent-bit/scripts/freeipa.lua` | Нормализация FreeIPA событий: LDAP bind/fail, Kerberos TGT, PKI, DNS, SSSD → `event.category/action/outcome`. Только при `'freeipa' in base_stack`. |
+| `agents/configs/fluent-bit/scripts/docker_events.lua` | Санитизация Docker Events API: замена `.` → `_` в ключах `Actor.Attributes`. При `'docker_events' in base_stack` или `'freeipa' in base_stack`. |
 | `logstash/configs/pipeline/ueba-main.conf` | Входящие порты UEBA: 5044 (beats relay), 5045 (auditd), 5047 (osquery); type-cast, индексы |
 | `agents/configs/auditd/audit.rules` | Что именно перехватывает auditd (фильтр событий) |
 | `opensearch/templates/fluent-audit.json` | Точные типы ECS-полей в auditd-индексе (`wildcard`, `ip`, `date`, `integer`) |

@@ -1,8 +1,8 @@
-# Скопировать в inventory.ini и заполнить реальными хостами.
+﻿# Скопировать в inventory.ini и заполнить реальными хостами.
 #
 # Структура групп:
 #   ueba_agents          — все хосты с UEBA-агентами (родитель)
-#   ├── pure_ueba        — только auditd + osquery ECS (client_stack: [])
+#   ├── pure_ueba        — только auditd + osquery ECS (base_stack: [])
 #   ├── docker_hosts     — pure_ueba + osquery BPF backend
 #   ├── workstations     — pure_ueba + workstation osquery-профиль
 #   ├── freeipa_hosts    — + базовый pipeline: freeipa/docker/suricata/waf
@@ -34,18 +34,18 @@ docker_event_hosts
 [workstations]
 # ws-alice.example.com  ansible_host=10.0.0.31
 
-# ── FreeIPA-хосты: client_stack=[freeipa, docker_events, suricata, waf] ──────
-# group_vars/freeipa_hosts.yml задаёт client_stack
+# ── FreeIPA-хосты: base_stack=[freeipa, docker_events, suricata, waf] ──────
+# group_vars/freeipa_hosts.yml задаёт base_stack
 [freeipa_hosts]
 # freeipa.example.com  ansible_host=10.0.0.51
 
-# ── Keycloak-хосты: client_stack=[keycloak] ──────────────────────────────────
-# group_vars/keycloak_hosts.yml задаёт client_stack
+# ── Keycloak-хосты: base_stack=[keycloak] ──────────────────────────────────
+# group_vars/keycloak_hosts.yml задаёт base_stack
 [keycloak_hosts]
 # keycloak.example.com  ansible_host=10.0.0.52
 
-# ── Docker event-хосты: client_stack=[docker_events, suricata, waf] ──────────
-# group_vars/docker_event_hosts.yml задаёт client_stack
+# ── Docker event-хосты: base_stack=[docker_events, suricata, waf] ──────────
+# group_vars/docker_event_hosts.yml задаёт base_stack
 [docker_event_hosts]
 # docker-events-1.example.com  ansible_host=10.0.0.53
 

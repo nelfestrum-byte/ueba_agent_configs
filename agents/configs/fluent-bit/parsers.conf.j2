@@ -1,4 +1,4 @@
-# /etc/fluent-bit/parsers.conf
+﻿# /etc/fluent-bit/parsers.conf
 # Сгенерирован Ansible из parsers.conf.j2
 
 # ── Security: auditd ──────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@
     Time_Format %b %e %H:%M:%S
     Time_Keep   On
 
-{% if client_stack | default([]) | length > 0 %}
+{% if base_stack | default([]) | length > 0 %}
 
 # ── Client: общие ─────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@
     Time_Keep   On
 
 {% endif %}
-{% if 'freeipa' in client_stack | default([]) %}
+{% if 'freeipa' in base_stack | default([]) %}
 
 # ── Client: FreeIPA ───────────────────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
----
+﻿---
 # Docker-хост: docker events + osquery_client + suricata + waf
-client_stack:
+base_stack:
   - docker_events
   - suricata
   - waf

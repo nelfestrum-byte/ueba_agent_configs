@@ -1,4 +1,4 @@
----
+﻿---
 # =============================================================================
 # Переменные развертывания UEBA-агентов
 # =============================================================================
@@ -12,7 +12,7 @@
 #   osquery → TCP 5047 → fluent-osquery-*
 #
 # logstash_common_host — общий Logstash (используется только если
-#   client_stack непустой):
+#   base_stack непустой):
 #   docker/freeipa/keycloak/... → TCP 5044 → data_*
 #
 logstash_security_host: logstash-security.example.local
@@ -23,18 +23,18 @@ logstash_common_port:   5044
 # Базовый pipeline (интеграция)
 # =============================================================================
 #
-# client_stack: список базовых pipeline-ов, которые добавляются к security-сбору.
+# base_stack: список базовых pipeline-ов, которые добавляются к security-сбору.
 # Возможные значения: freeipa, keycloak, docker_events, suricata, waf
 #
 # Примеры:
-#   client_stack: []                                      — pure UEBA (без базовых pipeline-ов)
-#   client_stack: [freeipa, docker_events, suricata, waf] — FreeIPA-хост
-#   client_stack: [keycloak]                              — Keycloak-хост
-#   client_stack: [docker_events, suricata, waf]          — Docker-хост
+#   base_stack: []                                      — pure UEBA (без базовых pipeline-ов)
+#   base_stack: [freeipa, docker_events, suricata, waf] — FreeIPA-хост
+#   base_stack: [keycloak]                              — Keycloak-хост
+#   base_stack: [docker_events, suricata, waf]          — Docker-хост
 #
 # Переопределяется через group_vars/freeipa_hosts.yml, keycloak_hosts.yml и т.д.
 #
-client_stack: []
+base_stack: []
 
 # Порт forward-input для Docker container logs (logfmt driver → fluent-bit)
 fluent_forward_port: 24224
