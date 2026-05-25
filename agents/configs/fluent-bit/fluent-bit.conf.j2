@@ -7,14 +7,14 @@
 #   osquery  → fluent-bit → Logstash TCP 5047 → fluent-osquery-*
 #
 {% if client_stack | default([]) | length > 0 %}
-# Клиентский стек ({{ client_stack | join(', ') }}):
+# Базовый стек ({{ client_stack | join(', ') }}):
 #   docker/freeipa/keycloak/... → fluent-bit → Logstash TCP {{ logstash_common_port | default(5044) }} → data_*
 #
 {% endif %}
 # Переменные окружения (/etc/default/fluent-bit):
 #   LOGSTASH_SECURITY_HOST — наш Logstash (5045/5047)
 {% if client_stack | default([]) | length > 0 %}
-#   LOGSTASH_COMMON_HOST   — клиентский Logstash ({{ logstash_common_port | default(5044) }})
+#   LOGSTASH_COMMON_HOST   — общий Logstash ({{ logstash_common_port | default(5044) }})
 {% endif %}
 
 [SERVICE]
@@ -140,7 +140,7 @@
 {% if client_stack | default([]) | length > 0 %}
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CLIENT PIPELINE — {{ client_stack | join(', ') }}
+# БАЗОВЫЙ PIPELINE — {{ client_stack | join(', ') }}
 # → Logstash TCP {{ logstash_common_port | default(5044) }} → data_* indices
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -458,9 +458,9 @@
 
 {% endif %}
 
-# ── Метаданные: fqdn и source_type (только клиентские теги) ──────────────────
+# ── Метаданные: fqdn и source_type (только базовые теги) ──────────────────────
 #
-# Match_Regex охватывает все клиентские теги, исключая наши auditd.* / osquery.*
+# Match_Regex охватывает все базовые теги, исключая наши auditd.* / osquery.*
 #
 [FILTER]
     Name        record_modifier
@@ -510,7 +510,7 @@
 
 # ── OUTPUT → Logstash Common ──────────────────────────────────────────────────
 #
-# Match_Regex: все клиентские теги, НЕ auditd.* и НЕ osquery.*
+# Match_Regex: все базовые теги, НЕ auditd.* и НЕ osquery.*
 #
 [OUTPUT]
     Name           tcp

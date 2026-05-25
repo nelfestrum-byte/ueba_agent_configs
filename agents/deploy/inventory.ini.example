@@ -1,29 +1,53 @@
-[ueba_agents]
-# Добавьте IP-адреса или hostname Debian-VM сюда:
-# agent01  ansible_host=10.0.0.11
-# agent02  ansible_host=10.0.0.12
-
-# Docker-хосты получают osquery BPF backend (P2-01):
-#   osquery_bpf_events_enabled=true (из group_vars/docker_hosts.yml)
-#   Требования: ядро ≥5.10, /sys/kernel/btf/vmlinux, osquery ≥4.6
+# Скопировать в inventory.ini и заполнить реальными хостами.
 #
-# [docker_hosts]
+# Структура групп:
+#   ueba_agents          — все хосты с UEBA-агентами (родитель)
+#   ├── pure_ueba        — только auditd + osquery ECS (client_stack: [])
+#   ├── docker_hosts     — pure_ueba + osquery BPF backend
+#   ├── workstations     — pure_ueba + workstation osquery-профиль
+#   ├── freeipa_hosts    — + базовый pipeline: freeipa/docker/suricata/waf
+#   ├── keycloak_hosts   — + базовый pipeline: keycloak container logs
+#   └── docker_event_hosts — + базовый pipeline: docker_events/suricata/waf
+
+[ueba_agents:children]
+pure_ueba
+docker_hosts
+workstations
+freeipa_hosts
+keycloak_hosts
+docker_event_hosts
+
+# ── Pure UEBA (только security pipeline) ─────────────────────────────────────
+[pure_ueba]
+# server01.example.com  ansible_host=10.0.0.11
+# server02.example.com  ansible_host=10.0.0.12
+
+# ── Docker-хосты: BPF backend (P2-01) ────────────────────────────────────────
+# Требования: ядро ≥5.10, /sys/kernel/btf/vmlinux, osquery ≥4.6
+# group_vars/docker_hosts.yml: osquery_bpf_events_enabled=true
+[docker_hosts]
 # docker-node-1.example.com  ansible_host=10.0.0.21
 # docker-node-2.example.com  ansible_host=10.0.0.22
-#
-# Workstations и servers без контейнеров — BPF выключен (default false):
-#
-# [workstations]
+
+# ── Workstations: осquery workstation-профиль ─────────────────────────────────
+# group_vars/workstations.yml: osquery_profile=workstation
+[workstations]
 # ws-alice.example.com  ansible_host=10.0.0.31
-#
-# [servers]
-# srv-db-1.example.com  ansible_host=10.0.0.41
-#
-# Группы docker_hosts/workstations/servers должны быть дочерними ueba_agents:
-# [ueba_agents:children]
-# docker_hosts
-# workstations
-# servers
+
+# ── FreeIPA-хосты: client_stack=[freeipa, docker_events, suricata, waf] ──────
+# group_vars/freeipa_hosts.yml задаёт client_stack
+[freeipa_hosts]
+# freeipa.example.com  ansible_host=10.0.0.51
+
+# ── Keycloak-хосты: client_stack=[keycloak] ──────────────────────────────────
+# group_vars/keycloak_hosts.yml задаёт client_stack
+[keycloak_hosts]
+# keycloak.example.com  ansible_host=10.0.0.52
+
+# ── Docker event-хосты: client_stack=[docker_events, suricata, waf] ──────────
+# group_vars/docker_event_hosts.yml задаёт client_stack
+[docker_event_hosts]
+# docker-events-1.example.com  ansible_host=10.0.0.53
 
 [ueba_agents:vars]
 ansible_user=deploy
