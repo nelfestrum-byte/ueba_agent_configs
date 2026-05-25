@@ -8,16 +8,19 @@
 # =============================================================================
 #
 # logstash_security_host — наш Logstash (UEBA):
-#   auditd  → TCP 5045 → fluent-audit-*
-#   osquery → TCP 5047 → fluent-osquery-*
+#   auditd  → TCP logstash_security_audit_port  (5045) → fluent-audit-*
+#   osquery → TCP logstash_security_osquery_port (5047) → fluent-osquery-*
 #
 # logstash_common_host — общий Logstash (используется только если
 #   base_stack непустой):
 #   docker/freeipa/keycloak/... → TCP 5044 → data_*
 #
-logstash_security_host: logstash-security.example.local
-logstash_common_host:   logstash-common.example.local
-logstash_common_port:   5044
+logstash_security_host:        logstash-security.example.local
+logstash_security_audit_port:  5045
+logstash_security_osquery_port: 5047
+
+logstash_common_host: logstash-common.example.local
+logstash_common_port: 5044
 
 # =============================================================================
 # Базовый pipeline (интеграция)

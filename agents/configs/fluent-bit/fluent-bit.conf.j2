@@ -3,8 +3,8 @@
 # Сгенерирован Ansible из fluent-bit.conf.j2
 #
 # Security-стек (всегда активен):
-#   auditd   → fluent-bit → Logstash TCP 5045 → fluent-audit-*
-#   osquery  → fluent-bit → Logstash TCP 5047 → fluent-osquery-*
+#   auditd   → fluent-bit → Logstash TCP {{ logstash_security_audit_port | default(5045) }} → fluent-audit-*
+#   osquery  → fluent-bit → Logstash TCP {{ logstash_security_osquery_port | default(5047) }} → fluent-osquery-*
 #
 {% if base_stack | default([]) | length > 0 %}
 # Базовый стек ({{ base_stack | join(', ') }}):
@@ -12,7 +12,7 @@
 #
 {% endif %}
 # Переменные окружения (/etc/default/fluent-bit):
-#   LOGSTASH_SECURITY_HOST — наш Logstash (5045/5047)
+#   LOGSTASH_SECURITY_HOST — наш Logstash ({{ logstash_security_audit_port | default(5045) }}/{{ logstash_security_osquery_port | default(5047) }})
 {% if base_stack | default([]) | length > 0 %}
 #   LOGSTASH_COMMON_HOST   — общий Logstash ({{ logstash_common_port | default(5044) }})
 {% endif %}
@@ -34,7 +34,7 @@
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECURITY PIPELINE — auditd → Logstash TCP 5045 → fluent-audit-*
+# SECURITY PIPELINE — auditd → Logstash TCP {{ logstash_security_audit_port | default(5045) }} → fluent-audit-*
 # ══════════════════════════════════════════════════════════════════════════════
 
 [INPUT]
@@ -83,7 +83,7 @@
     Name              tcp
     Match             auditd.*
     Host              ${LOGSTASH_SECURITY_HOST}
-    Port              5045
+    Port              {{ logstash_security_audit_port | default(5045) }}
     Format            json_lines
     Retry_Limit       10
     storage.total_limit_size 1G
@@ -93,7 +93,7 @@
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECURITY PIPELINE — osquery → Logstash TCP 5047 → fluent-osquery-*
+# SECURITY PIPELINE — osquery → Logstash TCP {{ logstash_security_osquery_port | default(5047) }} → fluent-osquery-*
 # ══════════════════════════════════════════════════════════════════════════════
 
 [INPUT]
@@ -129,7 +129,7 @@
     Name              tcp
     Match             osquery.*
     Host              ${LOGSTASH_SECURITY_HOST}
-    Port              5047
+    Port              {{ logstash_security_osquery_port | default(5047) }}
     Format            json_lines
     Retry_Limit       10
     storage.total_limit_size 512M
