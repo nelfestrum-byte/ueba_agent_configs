@@ -29,6 +29,46 @@
 
 ## Текущий backlog
 
+### QA-FIX-13. execve: PROCTITLE leakage → command_line мисматч
+
+**Приоритет:** P0 (ломает UEBA-скоринг по cmdline)  
+**Стоимость:** 5 мин (одна строка)  
+**Статус:** не начато  
+**Промпт:** [QA-FIX-13-execve-cmdline-proctitle.md](../testing/QA-FIX-13-execve-cmdline-proctitle.md)  
+**Суть:** 650+ execve событий имеют `process.command_line="runc init"` при несовпадающем exe/args. Убрать `if not record["process.command_line"]` условие — EXECVE-args всегда точнее PROCTITLE.
+
+---
+
+### QA-FIX-14. USER_CMD: user.name / command_line / event.action отсутствуют + DAEMON_START без action
+
+**Приоритет:** P0 (sudo-мониторинг слеп)  
+**Стоимость:** ~1 ч  
+**Статус:** не начато  
+**Промпт:** [QA-FIX-14-user-cmd-fields.md](../testing/QA-FIX-14-user-cmd-fields.md)  
+**Суть:** 166 user_cmd событий без user.name/target/cmdline (uid_name/auid_name не берутся для USER_* типов; cmd= hex из inner msg не парсится). Плюс 9 host событий без event.action (DAEMON_START не обработан).
+
+---
+
+### QA-FIX-15. setuid/setgid: user.target.id отсутствует
+
+**Приоритет:** P1 (privilege escalation tracking неполный)  
+**Стоимость:** ~2 ч (правки merge.lua + enrich.lua + index template)  
+**Статус:** не начато  
+**Промпт:** [QA-FIX-15-iam-user-target-id.md](../testing/QA-FIX-15-iam-user-target-id.md)  
+**Суть:** Syscall аргументы a0/a1/a2 не извлекаются из SYSCALL-записи → целевой UID после setuid неизвестен. Нужно сохранить sc_a0/a1/a2 в merge.lua и декодировать в enrich.lua.
+
+---
+
+### QA-FIX-16. osquery bpf_socket nonip: network.type отсутствует
+
+**Приоритет:** P1 (AF_UNIX / AF_NETLINK неразличимы)  
+**Стоимость:** 5 мин (три строки)  
+**Статус:** не начато  
+**Промпт:** [QA-FIX-16-osquery-nonip-network-type.md](../testing/QA-FIX-16-osquery-nonip-network-type.md)  
+**Суть:** В else-ветке bpf_sockets (non-IP) не выставляется `network.type`. Добавить `if fam=="1" then "unix" elseif fam=="16" then "netlink" ...` после реклассификации category.
+
+---
+
 ### P1-03. mTLS канал fluent-bit → Logstash
 
 **Приоритет:** P1 (безопасность канала)  
