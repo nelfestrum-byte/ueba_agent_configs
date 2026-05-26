@@ -26,7 +26,7 @@ Ansible-плейбук для установки и настройки аген�
 | Компонент | Требования |
 |-----------|-----------|
 | Агентские хосты | Debian/Ubuntu, пользователь с sudo |
-| Docker-хосты (опц.) | Ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6 |
+| BPF-хосты (опц.) | Ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6 |
 | Ansible (control node) | Ansible 2.14+, SSH-доступ к целевым хостам |
 | Logstash | Запущен и доступен (TCP 5045, 5047; опционально 5044) |
 
@@ -61,11 +61,11 @@ agents/
     ├── group_vars/
     │   ├── all.yml                  — глобальные переменные (скопировать из all.yml.example)
     │   ├── all.yml.example          — шаблон переменных
-    │   ├── docker_hosts.yml.example — пример для docker-хостов (BPF backend)
+    │   ├── bpf_hosts.yml.example    — пример для BPF-хостов (osquery BPF backend)
     │   ├── workstations.yml         — профиль workstation для osquery
     │   ├── freeipa_hosts.yml        — base_stack для FreeIPA-хостов
     │   ├── keycloak_hosts.yml       — base_stack для Keycloak-хостов
-    │   └── docker_event_hosts.yml   — base_stack для Docker event-хостов
+    │   └── docker_log_hosts.yml     — base_stack для Docker log-хостов (обычные логи)
     └── fetch-packages/
         ├── fetch.ps1                — скачать .deb для офлайн-деплоя (Windows)
         └── Dockerfile
@@ -98,28 +98,28 @@ $EDITOR inventory.ini
 | Группа | Описание | Особенности |
 |--------|----------|-------------|
 | `[pure_ueba]` | Только auditd + osquery ECS | `base_stack: []` |
-| `[docker_hosts]` | pure_ueba + BPF backend | ядро ≥ 5.10, BTF, `osquery_bpf_events_enabled: true` |
+| `[bpf_hosts]` | pure_ueba + osquery BPF backend (глубокий UEBA) | ядро ≥ 5.10, BTF, `osquery_bpf_events_enabled: true` |
 | `[workstations]` | pure_ueba + профиль workstation | добавляет chrome/firefox в osquery |
-| `[freeipa_hosts]` | + FreeIPA / Docker / Suricata / WAF | `base_stack: [freeipa, docker_events, suricata, waf]` |
-| `[keycloak_hosts]` | + Keycloak container logs | `base_stack: [keycloak]` |
-| `[docker_event_hosts]` | + Docker events / Suricata / WAF | `base_stack: [docker_events, suricata, waf]` |
+| `[freeipa_hosts]` | + FreeIPA / Docker / Suricata / WAF (клиент. логи) | `base_stack: [freeipa, docker_events, suricata, waf]` |
+| `[keycloak_hosts]` | + Keycloak container logs (клиент. логи) | `base_stack: [keycloak]` |
+| `[docker_log_hosts]` | + Docker events / Suricata / WAF (обычные логи) | `base_stack: [docker_events, suricata, waf]` |
 
 Пример `inventory.ini`:
 
 ```ini
 [ueba_agents:children]
 pure_ueba
-docker_hosts
+bpf_hosts
 workstations
 freeipa_hosts
 keycloak_hosts
-docker_event_hosts
+docker_log_hosts
 
 [pure_ueba]
 server01.example.com  ansible_host=10.0.0.11
 server02.example.com  ansible_host=10.0.0.12
 
-[docker_hosts]
+[bpf_hosts]
 docker-node-1.example.com  ansible_host=10.0.0.21
 
 [workstations]
@@ -131,7 +131,7 @@ freeipa.example.com  ansible_host=10.0.0.51
 [keycloak_hosts]
 keycloak.example.com  ansible_host=10.0.0.52
 
-[docker_event_hosts]
+[docker_log_hosts]
 docker-events-1.example.com  ansible_host=10.0.0.53
 
 [ueba_agents:vars]
@@ -178,7 +178,7 @@ osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
 ### BPF backend (docker-хосты)
 
 ```yaml
-osquery_bpf_events_enabled: false   # переопределяется в group_vars/docker_hosts.yml
+osquery_bpf_events_enabled: false   # переопределяется в group_vars/bpf_hosts.yml
 osquery_bpf_interval: 10
 ```
 
@@ -221,7 +221,7 @@ cd agents/deploy
 ansible-playbook agents-deploy.yml --ask-become-pass
 
 # Только определённая группа хостов
-ansible-playbook agents-deploy.yml --limit docker_hosts --ask-become-pass
+ansible-playbook agents-deploy.yml --limit bpf_hosts --ask-become-pass
 
 # Только определённые задачи (теги)
 ansible-playbook agents-deploy.yml --tags osquery --ask-become-pass
@@ -245,12 +245,12 @@ ansible-playbook agents-deploy.yml --check --ask-become-pass
 
 ## Групповые конфигурации
 
-### docker_hosts — BPF backend
+### bpf_hosts — osquery BPF backend (глубокий UEBA-мониторинг)
 
-Для хостов с Docker и ядром ≥ 5.10 создать `group_vars/docker_hosts.yml`:
+Для хостов с Docker и ядром ≥ 5.10 создать `group_vars/bpf_hosts.yml`:
 
 ```bash
-cp group_vars/docker_hosts.yml.example group_vars/docker_hosts.yml
+cp group_vars/bpf_hosts.yml.example group_vars/bpf_hosts.yml
 ```
 
 Содержимое:
@@ -260,7 +260,7 @@ osquery_bpf_events_enabled: true
 
 Плейбук автоматически проверит версию ядра и наличие `/sys/kernel/btf/vmlinux` перед включением BPF-таблиц.
 
-> **Важно:** на docker-хостах auditd-правило `-S bpf` будет срабатывать при загрузке BPF-программ osquery.
+> **Важно:** на bpf_hosts auditd-правило `-S bpf` будет срабатывать при загрузке BPF-программ osquery.
 > Добавьте whitelist: `-F exe!=/usr/bin/osqueryd` в `configs/auditd/audit.rules`, чтобы избежать feedback loop.
 
 ### workstations — профиль рабочих станций
@@ -272,15 +272,15 @@ osquery_profile: workstation
 
 Добавляет запросы `chrome_extensions_diff` и `firefox_addons_diff` в osquery schedule.
 
-### freeipa_hosts / keycloak_hosts / docker_event_hosts
+### freeipa_hosts / keycloak_hosts / docker_log_hosts — клиентские логи
 
-Готовые `group_vars` файлы задают `base_stack` — fluent-bit добавляет соответствующие pipeline-ы:
+Готовые `group_vars` файлы задают `base_stack` — fluent-bit добавляет соответствующие pipeline-ы для обычных логов (→ общий Logstash TCP 5044):
 
 | Группа | base_stack |
 |--------|------------|
 | `freeipa_hosts` | `[freeipa, docker_events, suricata, waf]` |
 | `keycloak_hosts` | `[keycloak]` |
-| `docker_event_hosts` | `[docker_events, suricata, waf]` |
+| `docker_log_hosts` | `[docker_events, suricata, waf]` |
 
 При непустом `base_stack` обязателен `logstash_common_host` в `all.yml`.
 

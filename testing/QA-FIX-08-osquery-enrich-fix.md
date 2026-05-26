@@ -314,7 +314,7 @@ end
 ### Шаг 7. Smoke на тестовом docker-хосте
 
 ```bash
-# 1. Раскатить на agent01 (он [docker_hosts])
+# 1. Раскатить на agent01 (он [bpf_hosts])
 ansible-playbook agents/deploy/agents-deploy.yml --limit=agent01.uir.prj --ask-become-pass
 
 # 2. Подождать ~3 минуты (нужно успеть собрать docker_containers diff и BPF события)
@@ -381,7 +381,7 @@ curl -s "$OS/fluent-osquery-*/_search" -H 'Content-Type: application/json' \
    - suspicious_mmap: process.executable now populated
    - kernel_keys: user.name resolved from user.id via /etc/passwd cache (added uid_to_name to proc_common)
    - docker_containers: event.action=container_observed_* (no false lifecycle claim from diff)
-   - Smoke on agent01 [docker_hosts]: container attribution lifted from 4% to ≥80% for /app/* processes
+   - Smoke on agent01 [bpf_hosts]: container attribution lifted from 4% to ≥80% for /app/* processes
 
    Closes WARN #1, #2, #3, #4, #5 (executable in mmap), #6 (user.name in kernel_keys) from QA-01.
    ```

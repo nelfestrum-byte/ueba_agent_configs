@@ -577,10 +577,10 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 | `process.env.key` | preload_envs (LD_PRELOAD/LD_AUDIT/LD_LIBRARY_PATH) |
 | `process.env.value` | preload_envs |
 
-### 4.5 BPF backend — event-driven таблицы (только docker-хосты)
+### 4.5 BPF backend — event-driven таблицы (только bpf_hosts)
 
 **Требования к хосту:** ядро ≥ 5.10 (рекомендуется ≥ 5.15), `/sys/kernel/btf/vmlinux` (CONFIG_DEBUG_INFO_BTF=y), osquery ≥ 4.6.  
-**Toggle:** `osquery_bpf_events_enabled: true` в `agents/deploy/group_vars/docker_hosts.yml`.  
+**Toggle:** `osquery_bpf_events_enabled: true` в `agents/deploy/group_vars/bpf_hosts.yml`.  
 На workstations и servers без контейнеров BPF backend выключен (дефолт false).
 
 #### `bpf_processes` (интервал: 10 сек, event-driven через eBPF)
@@ -671,7 +671,7 @@ SELECT uid, name, version, identifier, path FROM users CROSS JOIN firefox_addons
 
 | Файл | Зачем |
 |------|-------|
-| `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон конфига osquery. Содержит полный список запросов и их SQL — источник schema. BPF-блоки (`bpf_processes`, `bpf_sockets`, `docker_containers`) включаются при `osquery_bpf_events_enabled: true` (группа `[docker_hosts]`). |
+| `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон конфига osquery. Содержит полный список запросов и их SQL — источник schema. BPF-блоки (`bpf_processes`, `bpf_sockets`, `docker_containers`) включаются при `osquery_bpf_events_enabled: true` (группа `[bpf_hosts]`). |
 | `agents/configs/fluent-bit/fluent-bit.conf.j2` | Jinja2-шаблон главного конфига fluent-bit. Security-пайплайны (auditd/osquery) — всегда; клиентские пайплайны — условно по `base_stack`. Использует `${LOGSTASH_SECURITY_HOST}` (5045/5047) и `${LOGSTASH_COMMON_HOST}` (5044). |
 | `agents/configs/fluent-bit/parsers.conf.j2` | Jinja2-шаблон parsers.conf. Всегда: auditd-парсеры. При `base_stack` непустом: docker/logfmt. При `'freeipa' in base_stack`: FreeIPA-специфичные парсеры (ipa_kdc, dirsrv_*, dogtag, bind_dns, sssd, java_stacktrace). |
 | `agents/configs/fluent-bit/scripts/proc_common.lua` | Общая библиотека (shared module): `short_id()` (FNV-1a hash), кэши `pid→start_time/name/cmdline`, `read_proc_start()`, `get_sessionid()`, `make_session_id()`, `to_iso()`. Импортируется всеми тремя enrich-скриптами — изменение меняет behavior во всех пайплайнах. |

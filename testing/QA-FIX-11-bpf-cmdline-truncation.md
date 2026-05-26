@@ -125,7 +125,7 @@ if query_name == "bpf_processes" then
 ### Шаг 2. Раскатка через ansible
 
 ```bash
-cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass --limit docker_hosts
+cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass --limit bpf_hosts
 # или для всех:
 cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 ```
@@ -133,7 +133,7 @@ cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass
 Проверить, что fluent-bit перезапустился без ошибок:
 
 ```bash
-ansible docker_hosts -m shell -a "systemctl is-active fluent-bit; journalctl -u fluent-bit -n 30 --no-pager | grep -iE 'error|fatal|lua'" -i agents/deploy/inventory.ini
+ansible bpf_hosts -m shell -a "systemctl is-active fluent-bit; journalctl -u fluent-bit -n 30 --no-pager | grep -iE 'error|fatal|lua'" -i agents/deploy/inventory.ini
 ```
 
 ### Шаг 3. Опционально — обновить index template
@@ -157,7 +157,7 @@ ansible docker_hosts -m shell -a "systemctl is-active fluent-bit; journalctl -u 
 Сгенерировать truncation вручную:
 
 ```bash
-# На docker_hosts (любом) в любом контейнере
+# На bpf_hosts (любом) в любом контейнере
 ssh agent01.uir.prj 'docker exec nginx-test sh -c "cat /etc/passwd"'
 # Подождать 30 сек — osquery snapshot interval
 
@@ -205,7 +205,7 @@ curl -s "$OS/fluent-osquery-*/_search" -H 'Content-Type: application/json' -d '{
 - В новых `osquery.bpf_process_events` документах появляется `labels.cmdline_source = "osquery_bpf"` в 100%.
 - `labels.cmdline_truncated = "argv0_only"` появляется в части документов (там, где cmdline это одиночный токен = basename(path)).
 - Существующее поле `process.command_line` остаётся как было — не изменено.
-- fluent-bit healthy на docker_hosts, нет Lua errors.
+- fluent-bit healthy на bpf_hosts, нет Lua errors.
 - Smoke-тест с ручным `docker exec ... cat /etc/passwd` показывает event БЕЗ truncation флага (argv захвачен полностью); event для случая, когда BPF потерял argv — С флагом.
 
 ## Финал

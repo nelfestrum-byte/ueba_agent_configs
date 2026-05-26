@@ -28,7 +28,7 @@
 |--------|------|
 | **auditd** | Kernel audit: execve, sudo, auth, file_integrity → /var/log/audit/audit.log |
 | **fluent-bit** | 1) Читает audit.log; merge по serial + ECS enrich (Lua) → TCP 5045 → `fluent-audit-*`<br>2) Читает osqueryd.results.log; ECS enrich (Lua) → TCP 5047 → `fluent-osquery-*`<br>3) [опц.] Клиентские источники (freeipa/keycloak/docker/suricata/waf) → TCP 5044 → `data_*` на клиентском Logstash. Включаются через `base_stack` в group_vars. Конфиг генерируется из `fluent-bit.conf.j2`. |
-| **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи.<br>**На docker-хостах** (группа `[docker_hosts]`, `osquery_bpf_events_enabled=true`, ядро ≥5.10): BPF backend → `bpf_process_events`, `bpf_socket_events` — container-aware видимость с нативным `container.id`; `docker_containers` diff для инвентаря контейнеров. |
+| **osquery** | Diff-мониторинг: процессы, соединения, пользователи, модули, сервисы, cron, SSH-ключи.<br>**На BPF-хостах** (группа `[bpf_hosts]`, `osquery_bpf_events_enabled=true`, ядро ≥5.10): BPF backend → `bpf_process_events`, `bpf_socket_events` — container-aware видимость с нативным `container.id`; `docker_containers` diff для инвентаря контейнеров. |
 
 **auditbeat** не используется — конфликтует с auditd за audit netlink-сокет.
 
@@ -78,7 +78,7 @@ ueba-stand/
 │       ├── group_vars/all.yml.example     — шаблон переменных
 │       ├── group_vars/freeipa_hosts.yml   — base_stack: [freeipa, docker_events, suricata, waf]
 │       ├── group_vars/keycloak_hosts.yml  — base_stack: [keycloak]
-│       ├── group_vars/docker_event_hosts.yml — base_stack: [docker_events, suricata, waf]
+│       ├── group_vars/docker_log_hosts.yml — base_stack: [docker_events, suricata, waf]
 │       └── fetch-packages/              — скачать .deb для офлайн-деплоя
 │           ├── fetch.ps1
 │           └── Dockerfile
@@ -113,7 +113,7 @@ ueba-stand/
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | `logstash_security_host`, `logstash_common_host`, `base_stack`, версии .deb, osquery_profile |
-| **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_event_hosts.yml` | Переопределяют `base_stack` для соответствующих групп хостов |
+| **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_log_hosts.yml` | Переопределяют `base_stack` для соответствующих групп хостов |
 | **Index templates** | `opensearch/templates/*.json` | Маппинги ECS 8.11 v2.0 для всех индексов; применяются через logstash-deploy.yml |
 | **Release Notes** | `docs/RELEASE_NOTES_0.9.md` | Human-readable описание v0.9 |
 
@@ -246,10 +246,10 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 | Группа Ansible | `osquery_bpf_events_enabled` | BPF-таблицы |
 |---|---|---|
-| `[docker_hosts]` | `true` (из `group_vars/docker_hosts.yml`) | `bpf_process_events`, `bpf_socket_events`, `docker_containers` |
+| `[bpf_hosts]` | `true` (из `group_vars/bpf_hosts.yml`) | `bpf_process_events`, `bpf_socket_events`, `docker_containers` |
 | `[workstations]`, `[servers]` | `false` (из `group_vars/all.yml`) | нет |
 
-**Требования на docker-хостах:** ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6. Pre-flight assert в плейбуке.
+**Требования на bpf_hosts:** ядро ≥ 5.10, `/sys/kernel/btf/vmlinux`, osquery ≥ 4.6. Pre-flight assert в плейбуке.
 
 **Feedback loop с auditd `-S bpf`:** osqueryd при загрузке BPF-программ триггерит правило `-S bpf` в audit.rules → события попадают в fluent-bit → snowball. Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd` (отдельный коммит, не смешивать с другими задачами).
 
@@ -290,7 +290,7 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 
 Правило `-a always,exit -F arch=b64 -S bpf -F auid>=1000 -F auid!=unset -k ebpf_use` добавлено в P0-04 **без** whitelist'а osqueryd.
 
-На хостах с включённым BPF backend (`[docker_hosts]`) osqueryd триггерит это правило при загрузке BPF-программ → feedback loop. **Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`** — отдельный коммит.
+На хостах с включённым BPF backend (`[bpf_hosts]`) osqueryd триггерит это правило при загрузке BPF-программ → feedback loop. **Необходимо добавить к bpf-правилу `-F exe!=/usr/bin/osqueryd`** — отдельный коммит.
 
 ### `USER_*` / `CRED_*` / `SERVICE_*`: очистка raw-полей в самом конце enrich (QA-02 / QA-FIX-10)
 

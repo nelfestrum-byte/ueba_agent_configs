@@ -37,7 +37,7 @@ Linux-хост
                                                          └── fluent-osquery-YYYY.MM.dd
 ```
 
-На **docker-хостах** (группа `[docker_hosts]`, ядро ≥ 5.10) osquery дополнительно использует BPF backend — таблицы `bpf_process_events`, `bpf_socket_events`, `docker_containers` с container-aware видимостью.
+На **BPF-хостах** (группа `[bpf_hosts]`, ядро ≥ 5.10) osquery дополнительно использует BPF backend — таблицы `bpf_process_events`, `bpf_socket_events`, `docker_containers` с container-aware видимостью.
 
 ## Стек агентов
 
@@ -124,7 +124,7 @@ cp group_vars/all.yml.example group_vars/all.yml
 ansible-playbook agents-deploy.yml --ask-become-pass
 ```
 
-Поддерживаемые группы хостов: `pure_ueba`, `docker_hosts` (BPF backend), `workstations`, `freeipa_hosts`, `keycloak_hosts`, `docker_event_hosts`. Офлайн-установка через `fetch-packages/fetch.ps1`.
+Поддерживаемые группы хостов: `pure_ueba`, `bpf_hosts` (osquery BPF backend, глубокий UEBA), `workstations`, `freeipa_hosts`, `keycloak_hosts`, `docker_log_hosts` (обычные логи). Офлайн-установка через `fetch-packages/fetch.ps1`.
 
 ---
 

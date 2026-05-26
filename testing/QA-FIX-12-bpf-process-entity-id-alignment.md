@@ -178,13 +178,13 @@ if query_name == "bpf_processes" then
 ### Шаг 3. Раскатка
 
 ```bash
-cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass --limit docker_hosts
+cd agents/deploy && ansible-playbook agents-deploy.yml --ask-become-pass --limit bpf_hosts
 ```
 
 Проверить, что fluent-bit перезапустился без ошибок:
 
 ```bash
-ansible docker_hosts -m shell -a "systemctl is-active fluent-bit; journalctl -u fluent-bit -n 30 --no-pager | grep -iE 'error|fatal|lua'" -i agents/deploy/inventory.ini
+ansible bpf_hosts -m shell -a "systemctl is-active fluent-bit; journalctl -u fluent-bit -n 30 --no-pager | grep -iE 'error|fatal|lua'" -i agents/deploy/inventory.ini
 ```
 
 ## Post-flight (smoke-тест)
@@ -285,7 +285,7 @@ curl -s "$OS/fluent-osquery-*/_search?pretty" -H 'Content-Type: application/json
 - Для одного и того же `host.name + process.pid` долгоживущего процесса `process.entity_id` **совпадает** между `fluent-audit-*` execve, `fluent-osquery-*` `osquery.bpf_process_events`, `fluent-osquery-*` `osquery.bpf_socket_events`, `fluent-osquery-*` `osquery.processes`.
 - Документы с пропавшим `entity_id` (short-lived процессы) помечаются `labels.entity_id_source = "bpf_proc_short_lived"`.
 - `process.entity_id` присутствует в новых bpf_process_events ≥50% документов (порог зависит от профиля нагрузки — если меньше, обсудить с пользователем).
-- fluent-bit healthy на docker_hosts, нет Lua errors.
+- fluent-bit healthy на bpf_hosts, нет Lua errors.
 - Smoke-тест №1 (cross-source match) проходит — entity_id совпадает.
 
 ## Финал

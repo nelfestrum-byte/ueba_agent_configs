@@ -41,7 +41,7 @@ Linux-хост
                                                └── fluent-osquery-YYYY.MM.dd
 ```
 
-На **docker-хостах** (группа `[docker_hosts]`, ядро ≥ 5.10, osquery ≥ 4.6) дополнительно активируется osquery BPF backend: event-driven таблицы `bpf_process_events`, `bpf_socket_events`, diff-инвентарь `docker_containers` с нативным container attribution.
+На **BPF-хостах** (группа `[bpf_hosts]`, ядро ≥ 5.10, osquery ≥ 4.6) дополнительно активируется osquery BPF backend: event-driven таблицы `bpf_process_events`, `bpf_socket_events`, diff-инвентарь `docker_containers` с нативным container attribution.
 
 ---
 
@@ -189,7 +189,7 @@ UEBA-скоринг требует единого идентификатора �
 
 ### P2-01 — osquery BPF backend + container.entity_id (2026-05-21)
 
-Активирован eBPF backend osquery на docker-хостах (группа `[docker_hosts]`, ядро ≥ 5.10). Event-driven таблицы `bpf_process_events` и `bpf_socket_events` дают container-aware видимость без polling gap. Нативное поле `cid` (container ID из cgroup) → `container.id`. Добавлен diff-запрос `docker_containers` + кэш `container_id → {name, image}` в osquery_enrich.lua. `container.entity_id = host.name:container.name` — стабильный ключ для поведенческой модели.
+Активирован eBPF backend osquery на BPF-хостах (группа `[bpf_hosts]`, ядро ≥ 5.10). Event-driven таблицы `bpf_process_events` и `bpf_socket_events` дают container-aware видимость без polling gap. Нативное поле `cid` (container ID из cgroup) → `container.id`. Добавлен diff-запрос `docker_containers` + кэш `container_id → {name, image}` в osquery_enrich.lua. `container.entity_id = host.name:container.name` — стабильный ключ для поведенческой модели.
 
 ### P2-02 — Расширение osquery-запросов (2026-05-21)
 
@@ -203,7 +203,7 @@ UEBA-скоринг требует единого идентификатора �
 |----------------|-----------------|-------------|----------------------|
 | `[servers]` | `server` | нет | shell_history, packages, kernel_keys, acpi, suspicious_mmap |
 | `[workstations]` | `workstation` | нет | +chrome/firefox extensions |
-| `[docker_hosts]` | `server` | **да** | +bpf_process_events, bpf_socket_events, docker_containers |
+| `[bpf_hosts]` | `server` | **да** | +bpf_process_events, bpf_socket_events, docker_containers |
 
 ---
 
@@ -245,7 +245,7 @@ ansible-playbook logstash-deploy.yml --ask-vault-pass
 cd agents/deploy
 cp inventory.ini.example inventory.ini
 cp group_vars/all.yml.example group_vars/all.yml
-# заполнить logstash_host; для docker-хостов — group_vars/docker_hosts.yml
+# заполнить logstash_host; для BPF-хостов — group_vars/bpf_hosts.yml
 .\fetch-packages\fetch.ps1                     # скачать .deb офлайн (Windows)
 ansible-playbook agents-deploy.yml --ask-become-pass
 ```

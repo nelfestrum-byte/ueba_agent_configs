@@ -1,13 +1,13 @@
 ---
 # =============================================================================
-# Переопределения для группы [docker_hosts] (P2-01)
+# Переопределения для группы [bpf_hosts] (P2-01)
 # =============================================================================
 #
 # Использование:
-#   cp group_vars/docker_hosts.yml.example group_vars/docker_hosts.yml
+#   cp group_vars/bpf_hosts.yml.example group_vars/bpf_hosts.yml
 #
-# Ansible автоматически загружает group_vars/docker_hosts.yml для хостов
-# из группы [docker_hosts] в inventory.ini.
+# Ansible автоматически загружает group_vars/bpf_hosts.yml для хостов
+# из группы [bpf_hosts] в inventory.ini.
 #
 # Хосты в этой группе получают osquery BPF backend:
 #   - enable_bpf_events: true в osquery.conf

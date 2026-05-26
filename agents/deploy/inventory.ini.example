@@ -3,29 +3,29 @@
 # Структура групп:
 #   ueba_agents          — все хосты с UEBA-агентами (родитель)
 #   ├── pure_ueba        — только auditd + osquery ECS (base_stack: [])
-#   ├── docker_hosts     — pure_ueba + osquery BPF backend
+#   ├── bpf_hosts        — pure_ueba + osquery BPF backend (глубокий UEBA, ядро ≥5.10)
 #   ├── workstations     — pure_ueba + workstation osquery-профиль
-#   ├── freeipa_hosts    — + базовый pipeline: freeipa/docker/suricata/waf
-#   ├── keycloak_hosts   — + базовый pipeline: keycloak container logs
-#   └── docker_event_hosts — + базовый pipeline: docker_events/suricata/waf
+#   ├── freeipa_hosts    — + клиентский pipeline: freeipa/docker/suricata/waf
+#   ├── keycloak_hosts   — + клиентский pipeline: keycloak container logs
+#   └── docker_log_hosts — + клиентский pipeline: docker_events/suricata/waf (обычные логи)
 
 [ueba_agents:children]
 pure_ueba
-docker_hosts
+bpf_hosts
 workstations
 freeipa_hosts
 keycloak_hosts
-docker_event_hosts
+docker_log_hosts
 
 # ── Pure UEBA (только security pipeline) ─────────────────────────────────────
 [pure_ueba]
 # server01.example.com  ansible_host=10.0.0.11
 # server02.example.com  ansible_host=10.0.0.12
 
-# ── Docker-хосты: BPF backend (P2-01) ────────────────────────────────────────
+# ── BPF-хосты: osquery BPF backend, глубокий UEBA-мониторинг (P2-01) ─────────
 # Требования: ядро ≥5.10, /sys/kernel/btf/vmlinux, osquery ≥4.6
-# group_vars/docker_hosts.yml: osquery_bpf_events_enabled=true
-[docker_hosts]
+# group_vars/bpf_hosts.yml: osquery_bpf_events_enabled=true
+[bpf_hosts]
 # docker-node-1.example.com  ansible_host=10.0.0.21
 # docker-node-2.example.com  ansible_host=10.0.0.22
 
@@ -44,9 +44,9 @@ docker_event_hosts
 [keycloak_hosts]
 # keycloak.example.com  ansible_host=10.0.0.52
 
-# ── Docker event-хосты: base_stack=[docker_events, suricata, waf] ──────────
-# group_vars/docker_event_hosts.yml задаёт base_stack
-[docker_event_hosts]
+# ── Docker log-хосты: обычные логи docker_events/suricata/waf → общий pipeline
+# group_vars/docker_log_hosts.yml задаёт base_stack
+[docker_log_hosts]
 # docker-events-1.example.com  ansible_host=10.0.0.53
 
 [ueba_agents:vars]

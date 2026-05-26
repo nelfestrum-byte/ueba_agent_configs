@@ -68,7 +68,7 @@ osquery начиная с версии 4.6 имеет встроенный eBPF 
 - osquery ≥ 4.6
 
 **Что настраивается:**
-- `osquery.conf` → Jinja-template: `enable_bpf_events: true` только для группы `[docker_hosts]`
+- `osquery.conf` → Jinja-template: `enable_bpf_events: true` только для группы `[bpf_hosts]`
 - Ansible pre-flight: проверка версии ядра и наличия BTF перед раскаткой
 - Интервал scheduled BPF-запросов: 10 сек
 

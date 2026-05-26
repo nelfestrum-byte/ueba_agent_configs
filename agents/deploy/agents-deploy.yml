@@ -325,7 +325,7 @@
         msg: >-
           BTF (/sys/kernel/btf/vmlinux) is missing on this host —
           kernel built without CONFIG_DEBUG_INFO_BTF. BPF backend cannot work.
-          Exclude this host from [docker_hosts] or recompile the kernel.
+          Exclude this host from [bpf_hosts] or recompile the kernel.
       when:
         - osquery_bpf_events_enabled | default(false)
         - not btf_stat.stat.exists
