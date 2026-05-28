@@ -164,7 +164,6 @@
       ansible.builtin.command:
         cmd: augenrules --load
       changed_when: false
-      notify: restart auditd
 
     - name: Включить и запустить auditd
       ansible.builtin.systemd:
@@ -362,9 +361,9 @@
 
   handlers:
     - name: restart auditd
-      ansible.builtin.systemd:
-        name: auditd
-        state: restarted
+      ansible.builtin.command:
+        cmd: service auditd restart
+      changed_when: false
 
     - name: reload auditd rules
       ansible.builtin.command:
