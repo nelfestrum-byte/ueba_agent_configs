@@ -1,0 +1,2 @@
+---
+# Handlers не нужны — notify: "fluent-bit changed" обрабатывается ролью fluent_bit.

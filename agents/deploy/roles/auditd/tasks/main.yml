@@ -1,0 +1,36 @@
+---
+- name: Настроить auditd.conf
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    backup: true
+  loop:
+    - { regexp: '^end_of_event_timeout\s*=', line: 'end_of_event_timeout = 2' }
+    - { regexp: '^log_format\s*=',           line: 'log_format = ENRICHED' }
+    - { regexp: '^log_group\s*=',            line: 'log_group = adm' }
+    - { regexp: '^max_log_file\s*=',         line: 'max_log_file = 100' }
+    - { regexp: '^max_log_file_action\s*=',  line: 'max_log_file_action = ROTATE' }
+    - { regexp: '^num_logs\s*=',             line: 'num_logs = 5' }
+    - { regexp: '^flush\s*=',                line: 'flush = INCREMENTAL_ASYNC' }
+  notify: restart auditd
+
+- name: Развернуть правила auditd
+  ansible.builtin.copy:
+    src: ueba.rules
+    dest: /etc/audit/rules.d/ueba.rules
+    owner: root
+    group: root
+    mode: "0640"
+  notify: reload auditd rules
+
+- name: Загрузить правила через augenrules
+  ansible.builtin.command:
+    cmd: augenrules --load
+  changed_when: false
+
+- name: Включить и запустить auditd
+  ansible.builtin.systemd:
+    name: auditd
+    enabled: true
+    state: started

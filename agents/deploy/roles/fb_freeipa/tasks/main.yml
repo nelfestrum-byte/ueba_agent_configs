@@ -1,0 +1,60 @@
+---
+- name: freeipa | inputs conf.d
+  ansible.builtin.copy:
+    src: conf.d/40-freeipa-inputs.conf
+    dest: /etc/fluent-bit/conf.d/40-freeipa-inputs.conf
+    mode: "0644"
+  when: "'freeipa' in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | remove inputs conf.d
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/40-freeipa-inputs.conf
+    state: absent
+  when: "'freeipa' not in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | filters conf.d
+  ansible.builtin.copy:
+    src: conf.d/51-freeipa-filters.conf
+    dest: /etc/fluent-bit/conf.d/51-freeipa-filters.conf
+    mode: "0644"
+  when: "'freeipa' in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | remove filters conf.d
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/51-freeipa-filters.conf
+    state: absent
+  when: "'freeipa' not in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | parsers
+  ansible.builtin.copy:
+    src: parsers.d/freeipa.conf
+    dest: /etc/fluent-bit/parsers.d/10-freeipa.conf
+    mode: "0644"
+  when: "'freeipa' in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | remove parsers
+  ansible.builtin.file:
+    path: /etc/fluent-bit/parsers.d/10-freeipa.conf
+    state: absent
+  when: "'freeipa' not in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | freeipa.lua
+  ansible.builtin.copy:
+    src: scripts/freeipa.lua
+    dest: /etc/fluent-bit/scripts/freeipa.lua
+    mode: "0644"
+  when: "'freeipa' in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: freeipa | remove Lua when not active
+  ansible.builtin.file:
+    path: /etc/fluent-bit/scripts/freeipa.lua
+    state: absent
+  when: "'freeipa' not in base_stack | default([])"
+  notify: fluent-bit changed

@@ -1,0 +1,17 @@
+---
+- name: workstation | deploy pack
+  ansible.builtin.copy:
+    src: packs/workstation.conf
+    dest: /etc/osquery/packs/workstation.conf
+    owner: root
+    group: root
+    mode: "0640"
+  when: osquery_profile | default('server') == 'workstation'
+  notify: osquery changed
+
+- name: workstation | remove pack when not workstation profile
+  ansible.builtin.file:
+    path: /etc/osquery/packs/workstation.conf
+    state: absent
+  when: osquery_profile | default('server') != 'workstation'
+  notify: osquery changed

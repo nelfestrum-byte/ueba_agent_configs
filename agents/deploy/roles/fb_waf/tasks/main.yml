@@ -1,0 +1,15 @@
+---
+- name: waf | metadata conf.d
+  ansible.builtin.copy:
+    src: conf.d/54-waf-metadata.conf
+    dest: /etc/fluent-bit/conf.d/54-waf-metadata.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['waf', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: waf | remove metadata conf.d
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/54-waf-metadata.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['waf', 'freeipa']) | length == 0
+  notify: fluent-bit changed

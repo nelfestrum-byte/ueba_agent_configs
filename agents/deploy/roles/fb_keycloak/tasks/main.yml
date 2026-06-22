@@ -1,0 +1,30 @@
+---
+- name: keycloak | filters conf.d
+  ansible.builtin.copy:
+    src: conf.d/50-keycloak-filters.conf
+    dest: /etc/fluent-bit/conf.d/50-keycloak-filters.conf
+    mode: "0644"
+  when: "'keycloak' in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: keycloak | remove filters conf.d
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/50-keycloak-filters.conf
+    state: absent
+  when: "'keycloak' not in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: keycloak | remove_commas.lua
+  ansible.builtin.copy:
+    src: scripts/remove_commas.lua
+    dest: /etc/fluent-bit/scripts/remove_commas.lua
+    mode: "0644"
+  when: "'keycloak' in base_stack | default([])"
+  notify: fluent-bit changed
+
+- name: keycloak | remove Lua when not active
+  ansible.builtin.file:
+    path: /etc/fluent-bit/scripts/remove_commas.lua
+    state: absent
+  when: "'keycloak' not in base_stack | default([])"
+  notify: fluent-bit changed

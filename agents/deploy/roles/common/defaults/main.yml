@@ -1,0 +1,14 @@
+---
+supported_distros:
+  - bullseye
+  - bookworm
+  - trixie
+
+use_local_packages: true
+fluent_bit_version: "5.0.5"
+osquery_version: "5.23.0"
+fluent_bit_local_deb: "fluent-bit_{{ fluent_bit_version }}_amd64.deb"
+osquery_local_deb: "osquery_{{ osquery_version }}-1.linux_amd64.deb"
+
+osquery_apt_key_url: "https://pkg.osquery.io/deb/pubkey.gpg"
+osquery_apt_repo_url: "https://pkg.osquery.io/deb"

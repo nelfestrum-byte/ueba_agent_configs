@@ -1,0 +1,10 @@
+---
+- name: restart auditd
+  ansible.builtin.command:
+    cmd: service auditd restart
+  changed_when: false
+
+- name: reload auditd rules
+  ansible.builtin.command:
+    cmd: augenrules --load
+  changed_when: false

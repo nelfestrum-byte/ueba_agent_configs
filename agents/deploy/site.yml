@@ -1,0 +1,31 @@
+---
+# UEBA агенты: auditd + fluent-bit + osquery
+#
+# Использование:
+#   cd agents/deploy && ansible-playbook site.yml --ask-become-pass
+#
+# Точечный реплой по тегу:
+#   --tags common        — только пакеты/директории
+#   --tags auditd        — только auditd
+#   --tags fluent_bit    — только fluent-bit base (security pipeline)
+#   --tags fb            — все fluent-bit pipeline-роли (base + клиентские)
+#   --tags fb_keycloak   — только keycloak pipeline
+#   --tags osquery       — osquery base + bpf + workstation
+#   --tags osquery_bpf   — только BPF backend
+
+- name: Deploy UEBA agents
+  hosts: ueba_agents
+  become: true
+  gather_facts: true
+  roles:
+    - { role: common,              tags: [common] }
+    - { role: auditd,              tags: [auditd] }
+    - { role: fluent_bit,          tags: [fluent_bit, fb] }
+    - { role: fb_keycloak,         tags: [fb_keycloak, fb] }
+    - { role: fb_freeipa,          tags: [fb_freeipa, fb] }
+    - { role: fb_docker,           tags: [fb_docker, fb] }
+    - { role: fb_suricata,         tags: [fb_suricata, fb] }
+    - { role: fb_waf,              tags: [fb_waf, fb] }
+    - { role: osquery,             tags: [osquery] }
+    - { role: osquery_bpf,         tags: [osquery_bpf, osquery] }
+    - { role: osquery_workstation, tags: [osquery_workstation, osquery] }

@@ -1,0 +1,15 @@
+---
+- name: suricata | metadata conf.d
+  ansible.builtin.copy:
+    src: conf.d/53-suricata-metadata.conf
+    dest: /etc/fluent-bit/conf.d/53-suricata-metadata.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['suricata', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: suricata | remove metadata conf.d
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/53-suricata-metadata.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['suricata', 'freeipa']) | length == 0
+  notify: fluent-bit changed

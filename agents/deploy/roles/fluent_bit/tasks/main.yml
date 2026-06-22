@@ -1,0 +1,207 @@
+---
+- name: Развернуть fluent-bit.conf (базовый, статический)
+  ansible.builtin.copy:
+    src: fluent-bit.conf
+    dest: /etc/fluent-bit/fluent-bit.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: fluent-bit changed
+
+- name: Развернуть parsers.conf (базовые парсеры)
+  ansible.builtin.copy:
+    src: parsers.conf
+    dest: /etc/fluent-bit/parsers.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: fluent-bit changed
+
+- name: Развернуть conf.d/10-auditd.conf
+  ansible.builtin.copy:
+    src: conf.d/10-auditd.conf
+    dest: /etc/fluent-bit/conf.d/10-auditd.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: fluent-bit changed
+
+- name: Развернуть conf.d/20-osquery.conf
+  ansible.builtin.copy:
+    src: conf.d/20-osquery.conf
+    dest: /etc/fluent-bit/conf.d/20-osquery.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: fluent-bit changed
+
+- name: Развернуть core Lua скрипты
+  ansible.builtin.copy:
+    src: "scripts/{{ item }}"
+    dest: "/etc/fluent-bit/scripts/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - auditd_merge.lua
+    - auditd_enrich.lua
+    - osquery_enrich.lua
+    - proc_common.lua
+  notify: fluent-bit changed
+
+- name: Развернуть /etc/default/fluent-bit (env vars)
+  ansible.builtin.template:
+    src: fluent-bit.env.j2
+    dest: /etc/default/fluent-bit
+    owner: root
+    group: root
+    mode: "0640"
+  notify: fluent-bit changed
+
+# ── Shared client-pipeline infrastructure ─────────────────────────────────────
+# Условия в Ansible (не в Jinja2 conf-файлах). Conf-файлы статические.
+
+- name: Forward INPUT (keycloak / docker_events / freeipa)
+  ansible.builtin.copy:
+    src: conf.d/25-forward-input.conf
+    dest: /etc/fluent-bit/conf.d/25-forward-input.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['keycloak', 'docker_events', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove forward INPUT when unused
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/25-forward-input.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['keycloak', 'docker_events', 'freeipa']) | length == 0
+  notify: fluent-bit changed
+
+- name: Docker API inputs (docker_events / freeipa)
+  ansible.builtin.copy:
+    src: conf.d/26-docker-api-inputs.conf
+    dest: /etc/fluent-bit/conf.d/26-docker-api-inputs.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['docker_events', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove docker API inputs when unused
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/26-docker-api-inputs.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['docker_events', 'freeipa']) | length == 0
+  notify: fluent-bit changed
+
+- name: Suricata INPUT (suricata / freeipa)
+  ansible.builtin.copy:
+    src: conf.d/27-suricata-input.conf
+    dest: /etc/fluent-bit/conf.d/27-suricata-input.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['suricata', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove suricata INPUT when unused
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/27-suricata-input.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['suricata', 'freeipa']) | length == 0
+  notify: fluent-bit changed
+
+- name: WAF INPUT (waf / freeipa)
+  ansible.builtin.copy:
+    src: conf.d/28-waf-input.conf
+    dest: /etc/fluent-bit/conf.d/28-waf-input.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['waf', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove WAF INPUT when unused
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/28-waf-input.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['waf', 'freeipa']) | length == 0
+  notify: fluent-bit changed
+
+- name: Docker common filters (keycloak / docker_events / freeipa)
+  ansible.builtin.copy:
+    src: conf.d/85-docker-common-filters.conf
+    dest: /etc/fluent-bit/conf.d/85-docker-common-filters.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['keycloak', 'docker_events', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove docker common filters when unused
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/85-docker-common-filters.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['keycloak', 'docker_events', 'freeipa']) | length == 0
+  notify: fluent-bit changed
+
+- name: Docker events Lua filter (docker_events / freeipa)
+  ansible.builtin.copy:
+    src: conf.d/86-docker-events-lua.conf
+    dest: /etc/fluent-bit/conf.d/86-docker-events-lua.conf
+    mode: "0644"
+  when: base_stack | default([]) | intersect(['docker_events', 'freeipa']) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove docker events Lua filter when unused
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/86-docker-events-lua.conf
+    state: absent
+  when: base_stack | default([]) | intersect(['docker_events', 'freeipa']) | length == 0
+  notify: fluent-bit changed
+
+- name: Client fqdn metadata + docker_container source_type
+  ansible.builtin.copy:
+    src: conf.d/88-client-metadata.conf
+    dest: /etc/fluent-bit/conf.d/88-client-metadata.conf
+    mode: "0644"
+  when: base_stack | default([]) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove client metadata when base_stack empty
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/88-client-metadata.conf
+    state: absent
+  when: base_stack | default([]) | length == 0
+  notify: fluent-bit changed
+
+- name: Client OUTPUT → logstash_common (когда base_stack непуст)
+  ansible.builtin.copy:
+    src: conf.d/90-client-output.conf
+    dest: /etc/fluent-bit/conf.d/90-client-output.conf
+    mode: "0644"
+  when: base_stack | default([]) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove client OUTPUT when base_stack empty
+  ansible.builtin.file:
+    path: /etc/fluent-bit/conf.d/90-client-output.conf
+    state: absent
+  when: base_stack | default([]) | length == 0
+  notify: fluent-bit changed
+
+# ── Client parsers (базовые: docker/logfmt/nginx) ─────────────────────────────
+
+- name: Client common parsers (когда base_stack непуст)
+  ansible.builtin.copy:
+    src: parsers.d/client-common.conf
+    dest: /etc/fluent-bit/parsers.d/00-client-common.conf
+    mode: "0644"
+  when: base_stack | default([]) | length > 0
+  notify: fluent-bit changed
+
+- name: Remove client common parsers when base_stack empty
+  ansible.builtin.file:
+    path: /etc/fluent-bit/parsers.d/00-client-common.conf
+    state: absent
+  when: base_stack | default([]) | length == 0
+  notify: fluent-bit changed
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Включить и запустить fluent-bit
+  ansible.builtin.systemd:
+    name: fluent-bit
+    enabled: true
+    state: started

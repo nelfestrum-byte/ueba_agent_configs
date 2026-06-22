@@ -1,0 +1,4 @@
+---
+osquery_bpf_events_enabled: false
+osquery_bpf_interval: 10
+osquery_profile: server

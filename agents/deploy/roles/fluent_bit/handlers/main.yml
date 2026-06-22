@@ -1,0 +1,6 @@
+---
+- name: restart fluent-bit
+  listen: fluent-bit changed
+  ansible.builtin.systemd:
+    name: fluent-bit
+    state: restarted

@@ -1,0 +1,6 @@
+---
+- name: restart osqueryd
+  listen: osquery changed
+  ansible.builtin.systemd:
+    name: osqueryd
+    state: restarted

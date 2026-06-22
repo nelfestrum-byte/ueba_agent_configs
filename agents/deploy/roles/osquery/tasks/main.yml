@@ -1,0 +1,26 @@
+---
+- name: Развернуть osquery.conf (статический, без Jinja2)
+  ansible.builtin.copy:
+    src: osquery.conf
+    dest: /etc/osquery/osquery.conf
+    owner: root
+    group: root
+    mode: "0640"
+    validate: 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" %s'
+  notify: osquery changed
+
+- name: Валидировать конфиг osquery
+  ansible.builtin.command:
+    cmd: osqueryd --config_path=/etc/osquery/osquery.conf --config_check --database_path=/tmp/osquery-configcheck
+  changed_when: false
+
+- name: Удалить временную БД после валидации
+  ansible.builtin.file:
+    path: /tmp/osquery-configcheck
+    state: absent
+
+- name: Включить и запустить osqueryd
+  ansible.builtin.systemd:
+    name: osqueryd
+    enabled: true
+    state: started

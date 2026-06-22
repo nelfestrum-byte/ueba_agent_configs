@@ -1,0 +1,57 @@
+---
+# ── Pre-flight checks (только когда BPF включён) ──────────────────────────────
+
+- name: bpf | preflight kernel version (requires 5.10+)
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel is version('5.10', '>=')
+    fail_msg: >-
+      osquery_bpf_events_enabled=true требует ядро >= 5.10
+      (обнаружено: {{ ansible_kernel }}).
+      Отключите BPF на этом хосте или обновите ядро.
+  when: osquery_bpf_events_enabled | default(false)
+
+- name: bpf | preflight BTF availability (CONFIG_DEBUG_INFO_BTF)
+  ansible.builtin.stat:
+    path: /sys/kernel/btf/vmlinux
+  register: btf_stat
+  when: osquery_bpf_events_enabled | default(false)
+
+- name: bpf | fail if BTF missing
+  ansible.builtin.fail:
+    msg: >-
+      BTF (/sys/kernel/btf/vmlinux) отсутствует — ядро собрано без CONFIG_DEBUG_INFO_BTF.
+      BPF backend не может работать. Исключите хост из [bpf_hosts] или пересоберите ядро.
+  when:
+    - osquery_bpf_events_enabled | default(false)
+    - not btf_stat.stat.exists
+
+# ── BPF pack ──────────────────────────────────────────────────────────────────
+
+- name: bpf | deploy pack
+  ansible.builtin.copy:
+    src: packs/bpf.conf
+    dest: /etc/osquery/packs/bpf.conf
+    owner: root
+    group: root
+    mode: "0640"
+  when: osquery_bpf_events_enabled | default(false)
+  notify: osquery changed
+
+- name: bpf | remove pack when disabled
+  ansible.builtin.file:
+    path: /etc/osquery/packs/bpf.conf
+    state: absent
+  when: not (osquery_bpf_events_enabled | default(false))
+  notify: osquery changed
+
+# ── auditd whitelist: исключить osqueryd из bpf-правила (feedback loop fix) ───
+
+- name: bpf | whitelist osqueryd in auditd bpf rule
+  ansible.builtin.lineinfile:
+    path: /etc/audit/rules.d/ueba.rules
+    regexp: '(-a always,exit -F arch=b64 -S bpf.*-k ebpf_use)$'
+    line: '\1 -F exe!=/usr/bin/osqueryd'
+    backrefs: true
+  when: osquery_bpf_events_enabled | default(false)
+  notify: reload auditd rules

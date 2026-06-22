@@ -1,0 +1,3 @@
+---
+# osquery changed → обрабатывается ролью osquery
+# reload auditd rules → обрабатывается ролью auditd

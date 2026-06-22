@@ -1,0 +1,11 @@
+---
+fluent_config_version: "0.9"
+logstash_security_audit_port: 5045
+logstash_security_osquery_port: 5047
+logstash_common_port: 5044
+fluent_forward_port: 24224
+docker_socket: /var/run/docker.sock
+freeipa_log_base: /var/lib/ipa-data/var/log
+suricata_log_path: /opt/suricata/logs/eve.json
+waf_log_path: /opt/nginx/logs/modsecurity.log
+base_stack: []

@@ -1,0 +1,150 @@
+---
+- name: Assert Debian-family OS
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == "Debian"
+    fail_msg: >
+      Требуется Debian/Ubuntu. Обнаружено:
+      {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+
+- name: Assert поддерживаемый дистрибутив (офлайн)
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution_release in supported_distros
+    fail_msg: >-
+      Неподдерживаемый дистрибутив: {{ ansible_distribution_release }}.
+      Поддерживаются: {{ supported_distros | join(', ') }}.
+      Добавьте пакеты в roles/common/files/packages/{{ ansible_distribution_release }}/
+  when: use_local_packages | default(false)
+
+- name: Создать рабочие директории
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/audit/rules.d
+    - /etc/fluent-bit/conf.d
+    - /etc/fluent-bit/parsers.d
+    - /etc/fluent-bit/scripts
+    - /etc/osquery/packs
+    - /var/log/osquery
+    - /var/lib/fluent-bit/storage
+    - /usr/share/keyrings
+
+# ── Онлайн: из репозиториев ───────────────────────────────────────────────────
+
+- name: Добавить GPG ключ osquery (онлайн)
+  ansible.builtin.get_url:
+    url: "{{ osquery_apt_key_url }}"
+    dest: /usr/share/keyrings/osquery-keyring.gpg
+    mode: "0644"
+  when: not (use_local_packages | default(false))
+
+- name: Добавить apt-репозиторий osquery (онлайн)
+  ansible.builtin.apt_repository:
+    repo: >
+      deb [arch=amd64 signed-by=/usr/share/keyrings/osquery-keyring.gpg]
+      {{ osquery_apt_repo_url }} deb main
+    filename: osquery
+    state: present
+  when: not (use_local_packages | default(false))
+
+- name: Установить все пакеты (онлайн)
+  ansible.builtin.apt:
+    name:
+      - auditd
+      - audispd-plugins
+      - osquery
+      - acl
+    state: latest
+    update_cache: true
+  when: not (use_local_packages | default(false))
+
+# ── Офлайн: локальные .deb по дистрибутиву ───────────────────────────────────
+
+- name: Установить auditd, audispd-plugins, acl из системного репо (офлайн)
+  ansible.builtin.apt:
+    name:
+      - auditd
+      - audispd-plugins
+      - acl
+    state: latest
+    update_cache: true
+  when: use_local_packages | default(false)
+
+- name: Собрать факты о пакетах (офлайн)
+  ansible.builtin.package_facts:
+    manager: apt
+  when: use_local_packages | default(false)
+
+- name: Определить, нужна ли установка .deb пакетов
+  ansible.builtin.set_fact:
+    _debs_install_needed: >-
+      {{
+        (ansible_facts.packages.get('fluent-bit', [{}])[0].get('version', '')
+         is not search('^' + fluent_bit_version))
+        or (ansible_facts.packages.get('osquery', [{}])[0].get('version', '')
+         is not search('^' + osquery_version))
+      }}
+  when: use_local_packages | default(false)
+
+- name: Копировать fluent-bit .deb ({{ ansible_distribution_release }})
+  ansible.builtin.copy:
+    src: "packages/{{ ansible_distribution_release }}/{{ fluent_bit_local_deb }}"
+    dest: "/tmp/{{ fluent_bit_local_deb }}"
+    mode: "0644"
+  when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
+
+- name: Копировать osquery .deb ({{ ansible_distribution_release }})
+  ansible.builtin.copy:
+    src: "packages/{{ ansible_distribution_release }}/{{ osquery_local_deb }}"
+    dest: "/tmp/{{ osquery_local_deb }}"
+    mode: "0644"
+  when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
+
+- name: Установить fluent-bit из .deb
+  ansible.builtin.apt:
+    deb: "/tmp/{{ fluent_bit_local_deb }}"
+  when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
+
+- name: Установить osquery из .deb
+  ansible.builtin.apt:
+    deb: "/tmp/{{ osquery_local_deb }}"
+  when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
+
+- name: Удалить временные .deb файлы
+  ansible.builtin.file:
+    path: "/tmp/{{ item }}"
+    state: absent
+  loop:
+    - "{{ fluent_bit_local_deb }}"
+    - "{{ osquery_local_deb }}"
+  when: (use_local_packages | default(false)) and (_debs_install_needed | default(true))
+
+# ── ACL ───────────────────────────────────────────────────────────────────────
+
+- name: Добавить fluent-bit в группу adm
+  ansible.builtin.user:
+    name: fluent-bit
+    groups: adm
+    append: true
+  notify: restart fluent-bit
+
+- name: ACL на /var/log/audit для fluent-bit
+  ansible.builtin.shell:
+    cmd: |
+      setfacl -m u:fluent-bit:rx /var/log/audit
+      setfacl -m d:u:fluent-bit:r /var/log/audit
+      [ -f /var/log/audit/audit.log ] && setfacl -m u:fluent-bit:r /var/log/audit/audit.log || true
+  changed_when: false
+
+- name: ACL на /var/log/osquery для fluent-bit
+  ansible.builtin.shell:
+    cmd: |
+      setfacl -m u:fluent-bit:rx /var/log/osquery
+      setfacl -m d:u:fluent-bit:r /var/log/osquery
+      [ -f /var/log/osquery/osqueryd.results.log ] && setfacl -m u:fluent-bit:r /var/log/osquery/osqueryd.results.log || true
+  changed_when: false
