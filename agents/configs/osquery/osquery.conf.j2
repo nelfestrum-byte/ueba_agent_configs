@@ -121,7 +121,7 @@
     },
 
     "certificates": {
-      "query": "SELECT common_name, subject, issuer, ca, self_signed, not_valid_after, sha256, path, (SELECT hostname FROM system_info) AS hostname FROM certificates WHERE ca = '1' OR self_signed = '1'",
+      "query": "SELECT common_name, subject, issuer, ca, self_signed, not_valid_after, sha1, path, (SELECT hostname FROM system_info) AS hostname FROM certificates WHERE ca = '1' OR self_signed = '1'",
       "interval": 3600
     },
 
@@ -141,7 +141,7 @@
     },
 
     "shell_history": {
-      "query": "SELECT uid, username, command, history_file FROM shell_history;",
+      "query": "SELECT sh.uid, u.username, sh.command, sh.history_file FROM shell_history sh LEFT JOIN users u ON sh.uid = u.uid;",
       "interval": 300,
       "removed": false,
       "description": "User command history (bash/zsh) — UEBA sequence anomalies (P2-02)"
@@ -173,13 +173,6 @@
       "interval": 7200,
       "removed": false,
       "description": "Installed npm packages diff — supply-chain visibility (P2-02)"
-    },
-
-    "pip_packages_diff": {
-      "query": "SELECT name, version, path FROM pip_packages;",
-      "interval": 7200,
-      "removed": false,
-      "description": "Installed pip packages diff — supply-chain visibility (P2-02)"
     },
 
     "kernel_keys_diff": {
