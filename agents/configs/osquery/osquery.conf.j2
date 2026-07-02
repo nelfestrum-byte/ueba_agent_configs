@@ -66,7 +66,7 @@
     },
 
     "ssh_authorized_keys": {
-      "query": "SELECT authorized_keys.uid, authorized_keys.key, authorized_keys.key_file, users.username, (SELECT hostname FROM system_info) AS hostname FROM authorized_keys JOIN users USING(uid)",
+      "query": "SELECT authorized_keys.uid, authorized_keys.key, authorized_keys.key_file, users.username, (SELECT hostname FROM system_info) AS hostname FROM authorized_keys JOIN users USING(uid) WHERE authorized_keys.uid IN (SELECT uid FROM users WHERE uid >= 1000 AND uid < 65534)",
       "interval": 60
     },
 
