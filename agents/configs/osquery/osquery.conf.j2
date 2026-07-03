@@ -203,6 +203,13 @@
       "description": "Sudoers rules diff — persistence / privilege escalation detection (P2-02)"
     },
 
+    "process_open_files": {
+      "query": "SELECT pof.pid, pof.path AS file_path, pof.fd, p.name AS process_name, p.path AS process_path, p.uid, u.username, (SELECT hostname FROM system_info) AS hostname FROM process_open_files pof JOIN processes p ON p.pid = pof.pid LEFT JOIN users u ON p.uid = u.uid WHERE pof.path LIKE '/etc/%' OR pof.path LIKE '/home/%/.ssh/%' OR pof.path LIKE '/root/.ssh/%' OR pof.path LIKE '/tmp/%.sh' OR pof.path LIKE '/tmp/%.py' OR pof.path LIKE '/dev/shm/%'",
+      "interval": 300,
+      "removed": false,
+      "description": "Open-file snapshot for sensitive paths (poll, not real-time FIM — complements auditd -w/execve rules on /etc, ssh keys, /tmp, /dev/shm)"
+    },
+
     "suspicious_mmap": {
       "query": "SELECT pmm.pid, pmm.path, pmm.start, pmm.end, p.name AS process_name, p.path AS process_path FROM process_memory_map pmm JOIN processes p ON p.pid = pmm.pid WHERE pmm.path != '' AND pmm.path NOT LIKE '/usr/%' AND pmm.path NOT LIKE '/lib/%' AND pmm.path NOT LIKE '/lib64/%' AND pmm.path NOT LIKE '[%';",
       "interval": 300,

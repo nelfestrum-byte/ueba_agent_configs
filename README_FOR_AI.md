@@ -355,12 +355,12 @@ ARP-таблица (без loopback).
 #### `pci_devices` (интервал: 300 сек)
 PCI-устройства (базовый инвентарь, редко меняется).
 
-#### `process_open_files` (интервал: 60 сек)
-Открытые файлы нестандартных процессов (без /proc, /dev, /sys, /usr).
+#### `process_open_files` (интервал: 300 сек)
+Snapshot-poll открытых файлов по чувствительным путям: `/etc/*`, `~/.ssh/*`, `/root/.ssh/*`, `/tmp/*.sh`, `/tmp/*.py`, `/dev/shm/*`. **Не real-time FIM** (нет хэширования/diff содержимого, короткоживущие open→close между интервалами пропускаются) — дополняет уже существующие real-time auditd-правила (`-w` на `/etc/*`, `-S open,openat` на `/root/.ssh`, `suspicious_exec`/`tmp_write` на `/tmp`, `/dev/shm`; см. `agents/configs/auditd/audit.rules`) снэпшотом «кто сейчас держит файл открытым».
 
 - `action: added` → `event.action: file_opened`
-- ECS: `file.path`, `file.name`, `process.*`, `user.name`
-- **UEBA**: нестандартный процесс читает sensitive-файлы
+- ECS: `file.path`, `file.name`, `process.*`, `user.name` (через `LEFT JOIN users`)
+- **UEBA**: нестандартный процесс читает sensitive-файлы; кросс-сверка с auditd по `host.name + process.pid + @timestamp±2s`
 
 #### `certificates` (интервал: 3600 сек)
 CA и self-signed сертификаты из системного хранилища.
