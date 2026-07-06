@@ -1,0 +1,6 @@
+---
+# ССЗ-хост: docker events + suricata + bird (systemd unit bird.service)
+base_stack:
+  - docker_events
+  - suricata
+  - bird

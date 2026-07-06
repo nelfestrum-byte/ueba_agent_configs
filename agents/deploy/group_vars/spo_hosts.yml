@@ -1,0 +1,5 @@
+---
+# СПО-хост: docker events + WAF (modsecurity) → общий pipeline
+base_stack:
+  - docker_events
+  - waf

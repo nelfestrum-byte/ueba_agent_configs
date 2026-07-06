@@ -145,16 +145,24 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── INPUTs ────────────────────────────────────────────────────────────────────
+{% if 'bird' in base_stack %}
+[INPUT]
+    Name            systemd
+    storage.type    filesystem
+    read_from_tail  true
+    Tag             bird
+    Systemd_Filter  _SYSTEMD_UNIT=bird.service
+    DB              /opt/fluent-bit/bird_db
+    DB.sync         full
 
-{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
+{% endif %}
+{% if 'docker_events' in base_stack %}
 [INPUT]
     name             forward
     storage.type     filesystem
     Listen           0.0.0.0
     Port             {{ fluent_forward_port | default(24224) }}
 
-{% endif %}
-{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [INPUT]
     name             docker_events
     storage.type     filesystem
@@ -163,21 +171,7 @@
     Unix_Path        {{ docker_socket | default('/var/run/docker.sock') }}
 
 {% endif %}
-{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
-[INPUT]
-    name              tail
-    storage.type      filesystem
-    path              /var/log/osquery/osqueryd.*.log
-    read_from_Head    true
-    parser            json
-    tag               osquery_json
-    DB                /var/lib/fluent-bit/osquery_client.db
-    DB.sync           full
-    DB.locking        true
-    DB.journal_mode   WAL
-
-{% endif %}
-{% if 'suricata' in base_stack or 'freeipa' in base_stack %}
+{% if 'suricata' in base_stack %}
 [INPUT]
     name              tail
     storage.type      filesystem
@@ -191,7 +185,7 @@
     DB.journal_mode   WAL
 
 {% endif %}
-{% if 'waf' in base_stack or 'freeipa' in base_stack %}
+{% if 'waf' in base_stack %}
 [INPUT]
     name              tail
     storage.type      filesystem
@@ -320,7 +314,18 @@
 {% endif %}
 
 # ── FILTERs ───────────────────────────────────────────────────────────────────
+{% if 'bird' in base_stack %}
+[FILTER]
+    Name    modify
+    Match   bird
+    Rename  log unparsed_log
 
+[FILTER]
+    Name    record_modifier
+    Match   bird
+    Record  source_type bird
+
+{% endif %}
 {% if 'freeipa' in base_stack %}
 [FILTER]
     Name        modify
@@ -385,7 +390,7 @@
     call             normalize
 
 {% endif %}
-{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
+{% if 'docker_events' in base_stack %}
 [FILTER]
     Name    grep
     Match   docker.*
@@ -405,8 +410,6 @@
     Reserve_Data true
     Preserve_Key false
 
-{% endif %}
-{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    lua
     Match   docker_events
@@ -450,7 +453,7 @@
     Rule    $logger "org.keycloak.events" docker.keycloak_events false
 
 {% endif %}
-{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
+{% if 'docker_events' in base_stack %}
 [FILTER]
     Name    modify
     Match   docker.*
@@ -464,7 +467,7 @@
 #
 [FILTER]
     Name        record_modifier
-    Match_Regex ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$)
+    Match_Regex ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$|bird$)
     Record      fqdn ${HOSTNAME}
 
 {% if 'freeipa' in base_stack %}
@@ -474,33 +477,26 @@
     Record  source_type freeipa
 
 {% endif %}
-{% if 'keycloak' in base_stack or 'docker_events' in base_stack or 'freeipa' in base_stack %}
+{% if 'docker_events' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   docker.*
     Record  source_type docker_container
 
-{% endif %}
-{% if 'docker_events' in base_stack or 'freeipa' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   docker_events
     Record  source_type docker_events
 
-[FILTER]
-    Name    record_modifier
-    Match   osquery_json
-    Record  source_type osquery
-
 {% endif %}
-{% if 'suricata' in base_stack or 'freeipa' in base_stack %}
+{% if 'suricata' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   suricata_json
     Record  source_type suricata
 
 {% endif %}
-{% if 'waf' in base_stack or 'freeipa' in base_stack %}
+{% if 'waf' in base_stack %}
 [FILTER]
     Name    record_modifier
     Match   waf_json
@@ -514,7 +510,7 @@
 #
 [OUTPUT]
     Name           tcp
-    Match_Regex    ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$)
+    Match_Regex    ^(docker\.|freeipa\.|docker_events$|suricata_json$|waf_json$|osquery_json$|bird$)
     Host           ${LOGSTASH_COMMON_HOST}
     Port           {{ logstash_common_port | default(5044) }}
     Format         json_lines

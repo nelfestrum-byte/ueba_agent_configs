@@ -4,5 +4,5 @@
 base_stack:
   - freeipa
   - docker_events
-  - suricata
-  - waf
+#  - suricata
+#  - waf

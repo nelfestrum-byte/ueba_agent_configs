@@ -56,7 +56,8 @@ ueba-stand/
 ├── agents/
 │   ├── configs/
 │   │   ├── auditd/
-│   │   │   └── audit.rules              — правила auditd для UEBA (execve, network, identity...)
+│   │   │   ├── audit.rules              — правила auditd для UEBA (execve, network, identity...)
+│   │   │   └── auditd.conf              — полный конфиг auditd (копируется целиком, не lineinfile)
 │   │   ├── fluent-bit/
 │   │   │   ├── fluent-bit.conf.j2       — Jinja2-шаблон: security + клиентские pipeline-ы (по base_stack)
 │   │   │   ├── parsers.conf.j2          — Jinja2-шаблон: auditd-парсеры + FreeIPA-парсеры (по base_stack)
@@ -76,9 +77,11 @@ ueba-stand/
 │       ├── inventory.ini
 │       ├── group_vars/all.yml              — logstash_security_host, logstash_common_host, base_stack, версии пакетов
 │       ├── group_vars/all.yml.example     — шаблон переменных
-│       ├── group_vars/freeipa_hosts.yml   — base_stack: [freeipa, docker_events, suricata, waf]
-│       ├── group_vars/keycloak_hosts.yml  — base_stack: [keycloak]
-│       ├── group_vars/docker_log_hosts.yml — base_stack: [docker_events, suricata, waf]
+│       ├── group_vars/freeipa_hosts.yml   — base_stack: [freeipa, docker_events]
+│       ├── group_vars/keycloak_hosts.yml  — base_stack: [keycloak, docker_events]
+│       ├── group_vars/docker_log_hosts.yml — base_stack: [docker_events]
+│       ├── group_vars/spo_hosts.yml       — base_stack: [docker_events, waf]
+│       ├── group_vars/ssz_hosts.yml       — base_stack: [docker_events, suricata, bird]
 │       └── fetch-packages/              — скачать .deb для офлайн-деплоя
 │           ├── fetch.ps1
 │           └── Dockerfile
@@ -113,7 +116,8 @@ ueba-stand/
 | **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | `logstash_security_host`, `logstash_common_host`, `base_stack`, версии .deb, osquery_profile |
-| **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_log_hosts.yml` | Переопределяют `base_stack` для соответствующих групп хостов |
+| **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_log_hosts.yml`, `spo_hosts.yml`, `ssz_hosts.yml` | Переопределяют `base_stack` для соответствующих групп хостов. Возможные значения: freeipa, keycloak, docker_events, suricata, waf, bird. forward-input (24224) и docker.* фильтры включаются только по `docker_events` |
+| **Конфиг auditd** | `agents/configs/auditd/auditd.conf` | Разворачивается копированием целиком (lineinfile не сходился на хостах с отличающимся дефолтом): ENRICHED, log_group=adm, ротация 5×100MB |
 | **Index templates** | `opensearch/templates/*.json` | Маппинги ECS 8.11 v2.0 для всех индексов; применяются через logstash-deploy.yml |
 | **Release Notes** | `docs/RELEASE_NOTES_0.9.md` | Human-readable описание v0.9 |
 

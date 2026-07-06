@@ -5,9 +5,11 @@
 #   ├── pure_ueba        — только auditd + osquery ECS (base_stack: [])
 #   ├── bpf_hosts        — pure_ueba + osquery BPF backend (глубокий UEBA, ядро ≥5.10)
 #   ├── workstations     — pure_ueba + workstation osquery-профиль
-#   ├── freeipa_hosts    — + клиентский pipeline: freeipa/docker/suricata/waf
+#   ├── freeipa_hosts    — + клиентский pipeline: freeipa/docker
 #   ├── keycloak_hosts   — + клиентский pipeline: keycloak container logs
-#   └── docker_log_hosts — + клиентский pipeline: docker_events/suricata/waf (обычные логи)
+#   ├── docker_log_hosts — + клиентский pipeline: docker_events (обычные логи)
+#   ├── spo_hosts        — + клиентский pipeline: docker_events/waf
+#   └── ssz_hosts        — + клиентский pipeline: docker_events/suricata/bird
 
 [ueba_agents:children]
 pure_ueba
@@ -16,6 +18,8 @@ workstations
 freeipa_hosts
 keycloak_hosts
 docker_log_hosts
+spo_hosts
+ssz_hosts
 
 # ── Pure UEBA (только security pipeline) ─────────────────────────────────────
 [pure_ueba]
@@ -44,10 +48,20 @@ docker_log_hosts
 [keycloak_hosts]
 # keycloak.example.com  ansible_host=10.0.0.52
 
-# ── Docker log-хосты: обычные логи docker_events/suricata/waf → общий pipeline
+# ── Docker log-хосты: обычные логи docker_events → общий pipeline
 # group_vars/docker_log_hosts.yml задаёт base_stack
 [docker_log_hosts]
 # docker-events-1.example.com  ansible_host=10.0.0.53
+
+# ── СПО-хосты: docker_events + waf ──────────────────────────────────────────
+# group_vars/spo_hosts.yml задаёт base_stack
+[spo_hosts]
+# spo-1.example.com  ansible_host=10.0.0.54
+
+# ── ССЗ-хосты: docker_events + suricata + bird ──────────────────────────────
+# group_vars/ssz_hosts.yml задаёт base_stack
+[ssz_hosts]
+# ssz-1.example.com  ansible_host=10.0.0.55
 
 [ueba_agents:vars]
 ansible_user=deploy

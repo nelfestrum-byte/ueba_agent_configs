@@ -45,6 +45,7 @@
         - /etc/osquery
         - /var/log/osquery
         - /var/lib/fluent-bit/storage
+        - /opt/fluent-bit
         - /usr/share/keyrings
 
   tasks:
@@ -97,6 +98,14 @@
         manager: apt
       when: use_local_packages | default(false)
 
+    # fluent-bit 5.x требует glibc новее, чем в Debian 11 (bullseye) —
+    # для таких хостов откатываемся на последнюю совместимую 3.0.6
+    - name: Debian 11 — использовать fluent-bit 3.0.6
+      ansible.builtin.set_fact:
+        fluent_bit_version: "3.0.6"
+        fluent_bit_local_deb: "fluent-bit_3.0.6_amd64.deb"
+      when: ansible_distribution_major_version == '11'
+
     - name: Проверить актуальность установленных версий .deb пакетов
       ansible.builtin.set_fact:
         _debs_install_needed: >-
@@ -135,20 +144,15 @@
 
     # ── 4. auditd — конфигурация ───────────────────────────────────────────────
 
-    - name: Настроить auditd.conf (EOE-записи, enriched format, log_group)
-      ansible.builtin.lineinfile:
-        path: /etc/audit/auditd.conf
-        regexp: "{{ item.regexp }}"
-        line: "{{ item.line }}"
-        backup: true
-      loop:
-        - { regexp: '^end_of_event_timeout\s*=', line: 'end_of_event_timeout = 2' }
-        - { regexp: '^log_format\s*=',           line: 'log_format = ENRICHED' }
-        - { regexp: '^log_group\s*=',            line: 'log_group = adm' }
-        - { regexp: '^max_log_file\s*=',         line: 'max_log_file = 100' }
-        - { regexp: '^max_log_file_action\s*=',  line: 'max_log_file_action = ROTATE' }
-        - { regexp: '^num_logs\s*=',             line: 'num_logs = 5' }
-        - { regexp: '^flush\s*=',                line: 'flush = INCREMENTAL_ASYNC' }
+    # Целиком заменяем auditd.conf (вместо lineinfile): на части хостов
+    # дефолтный конфиг отсутствовал/отличался, точечные правки не сходились
+    - name: Развернуть auditd.conf (enriched format, log_group, ротация)
+      ansible.builtin.copy:
+        src: ../configs/auditd/auditd.conf
+        dest: /etc/audit/auditd.conf
+        owner: root
+        group: root
+        mode: "0640"
       notify: restart auditd
 
     - name: Развернуть правила аудита
@@ -164,6 +168,7 @@
       ansible.builtin.command:
         cmd: augenrules --load
       changed_when: false
+      notify: restart auditd
 
     - name: Включить и запустить auditd
       ansible.builtin.systemd:
@@ -361,9 +366,9 @@
 
   handlers:
     - name: restart auditd
-      ansible.builtin.command:
-        cmd: service auditd restart
-      changed_when: false
+      ansible.builtin.systemd:
+        name: auditd
+        state: restarted
 
     - name: reload auditd rules
       ansible.builtin.command:

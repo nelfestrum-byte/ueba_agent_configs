@@ -1,4 +1,6 @@
 ---
 # Keycloak-хост: Docker container logs (forward input) с keycloak event filter
+# docker_events обязателен: forward-input и docker.* фильтры включаются по нему
 base_stack:
   - keycloak
+  - docker_events

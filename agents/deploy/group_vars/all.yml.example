@@ -27,13 +27,16 @@ logstash_common_port: 5044
 # =============================================================================
 #
 # base_stack: список базовых pipeline-ов, которые добавляются к security-сбору.
-# Возможные значения: freeipa, keycloak, docker_events, suricata, waf
+# Возможные значения: freeipa, keycloak, docker_events, suricata, waf, bird
+#
+# ВАЖНО: forward-input (24224) и docker.* фильтры включаются только по
+# docker_events — для keycloak-хостов добавляйте docker_events в стек.
 #
 # Примеры:
-#   base_stack: []                                      — pure UEBA (без базовых pipeline-ов)
-#   base_stack: [freeipa, docker_events, suricata, waf] — FreeIPA-хост
-#   base_stack: [keycloak]                              — Keycloak-хост
-#   base_stack: [docker_events, suricata, waf]          — Docker-хост
+#   base_stack: []                                — pure UEBA (без базовых pipeline-ов)
+#   base_stack: [freeipa, docker_events]          — FreeIPA-хост
+#   base_stack: [keycloak, docker_events]         — Keycloak-хост
+#   base_stack: [docker_events, suricata, bird]   — Docker-хост с Suricata и BIRD
 #
 # Переопределяется через group_vars/freeipa_hosts.yml, keycloak_hosts.yml и т.д.
 #
