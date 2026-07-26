@@ -21,3 +21,5 @@ tests/osquery/inventory.ini
 
 # Сборка
 dist/*
+
+credentials
