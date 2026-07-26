@@ -39,6 +39,9 @@
 -w /etc/sudoers.d/ -p wa -k sudo_changes
 
 # ── SSH ключи ────────────────────────────────────────────────────────────────
+# -F dir= требует, чтобы путь существовал на момент загрузки правил (иначе auditctl -R
+# падает с ENOENT и обрывает загрузку ВСЕХ последующих правил) — /root/.ssh создаётся
+# заранее в agents-deploy.yml перед деплоем правил.
 -a always,exit -F arch=b64 -S open,openat -F dir=/root/.ssh -k ssh_keys
 # -F name=authorized_keys не поддерживается в auditd < 3.0 (Debian Buster).
 # Для auditd >= 3.0 можно добавить: -a always,exit -F arch=b64 -S open,openat -F dir=/home -F name=authorized_keys -k ssh_keys
@@ -69,7 +72,6 @@
 # ── Модули ядра ──────────────────────────────────────────────────────────────
 -a always,exit -F arch=b64 -S init_module,finit_module -k module_load
 -a always,exit -F arch=b64 -S delete_module -k module_unload
--w /etc/modprobe.conf  -p wa -k module_changes
 -w /etc/modprobe.d/    -p wa -k module_changes
 
 # ── Подозрительные пути выполнения ───────────────────────────────────────────
@@ -114,8 +116,9 @@
 -a always,exit -F arch=b64 -S rename -S renameat -S renameat2 -F dir=/bin      -k binary_modification
 
 # ── Аудит конфигурации auditd ────────────────────────────────────────────────
+# /etc/audisp/ убран: audisp слит в auditd с версии 3.0 (Debian 11+), каталога не существует —
+# конфиг плагинов теперь в /etc/audit/.
 -w /etc/audit/   -p wa -k audit_config_change
--w /etc/audisp/  -p wa -k audit_config_change
 
 # ── Подозрительные действия: запись и исполнение из /tmp и /dev/shm ──────────
 -a always,exit -F arch=b64 -S openat -F dir=/tmp     -F success=1 -k tmp_write
@@ -129,6 +132,8 @@
 -a always,exit -F arch=b64 -S utimensat,utimes,futimesat -F auid>=1000 -F auid!=unset -k timestomp
 
 # LD_PRELOAD / library path persistence
+# -w тоже требует существующий inode; /etc/ld.so.preload обычно отсутствует на чистом
+# хосте — создаётся пустым в agents-deploy.yml перед деплоем правил (см. ssh_keys выше).
 -w /etc/ld.so.preload -p wa -k preload_inject
 -w /etc/ld.so.conf    -p wa -k libpath_change
 -w /etc/ld.so.conf.d/ -p wa -k libpath_change
@@ -148,28 +153,26 @@
 -a always,exit -F arch=b64 -S swapon,swapoff -k swap_modify
 
 # ── Tier B: persistence, network/DNS, package mgmt (P1-01) ───────────────────
+# /etc/dnf/, /etc/yum.repos.d/ убраны: RHEL/Fedora-only, на Debian-флоте не бывают —
+# apt уже покрыт отдельным правилом ниже (pkg_mgmt_change).
+# /etc/inittab убран: systemd не использует inittab, файла не существует —
+# init-скрипты уже покрыты /etc/init.d/ и /etc/rc.local ниже.
 -w /etc/environment       -p wa -k env_change
 -w /etc/selinux/          -p wa -k mac_policy_change
 -w /etc/apparmor/         -p wa -k mac_policy_change
 -w /etc/apparmor.d/       -p wa -k mac_policy_change
 -w /etc/profile.d/        -p wa -k shell_profile_change
 -w /etc/profile           -p wa -k shell_profile_change
--w /etc/bashrc            -p wa -k shell_profile_change
--w /etc/inittab           -p wa -k init_change
+-w /etc/bash.bashrc       -p wa -k shell_profile_change
 -w /etc/init.d/           -p wa -k init_change
 -w /etc/rc.local          -p wa -k init_change
 -w /etc/fstab             -p wa -k fstab_change
 -w /etc/udev/rules.d/     -p wa -k udev_change
 -w /etc/apt/              -p wa -k pkg_mgmt_change
--w /etc/dnf/              -p wa -k pkg_mgmt_change
--w /etc/yum.repos.d/      -p wa -k pkg_mgmt_change
 -w /etc/nftables.conf     -p wa -k firewall_change
--w /etc/iptables/         -p wa -k firewall_change
 -w /etc/issue             -p wa -k issue_change
 -w /etc/issue.net         -p wa -k issue_change
--w /etc/sssd/             -p wa -k user_changes
--w /etc/openldap/         -p wa -k user_changes
--w /etc/krb5.conf         -p wa -k user_changes
+-w /etc/ldap/             -p wa -k user_changes
 -w /etc/polkit-1/         -p wa -k pam_changes
 
 -a always,exit -F arch=b64 -S sethostname,setdomainname -k hostname_dns_change
@@ -177,6 +180,15 @@
 -w /etc/resolv.conf       -p wa -k hostname_dns_change
 
 -a always,exit -F arch=b64 -S mknod,mknodat -F auid>=1000 -F auid!=unset -k specialfile_create
+
+# ── Опциональные интеграции (могут отсутствовать не на всех хостах флота) ────
+# Вынесены в конец файла: auditctl -R прерывает загрузку ВСЕХ последующих правил
+# при первой ошибке "No such file or directory" (нерезолвящийся -w путь), поэтому
+# рискованные условные пути стоят последними — если один из них отсутствует на
+# конкретном хосте, теряется только он, а не весь ruleset выше.
+-w /etc/iptables/         -p wa -k firewall_change
+-w /etc/sssd/             -p wa -k user_changes
+-w /etc/krb5.conf         -p wa -k user_changes
 
 # ── Иммутабельный режим (раскомментировать после стабилизации правил) ────────
 ## После -e 2 правила нельзя изменить до перезагрузки. Это рекомендуется в проде,
