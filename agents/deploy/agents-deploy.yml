@@ -32,6 +32,41 @@
           Плейбук использует apt; требуется Debian/Ubuntu.
           Обнаружено: {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
 
+    # Полная переустановка при каждом прогоне (как на живом стенде): останавливаем
+    # и удаляем fluent-bit/osquery, чистим их данные/конфиги перед деплоем — вместо
+    # инкрементального апдейта. Ниже по плейбуку install-задачи после этого всегда
+    # сработают заново (пакеты гарантированно отсутствуют в package_facts).
+    - name: stop fluent-bit and osqueryd
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      ignore_errors: true
+      loop:
+        - fluent-bit
+        - osqueryd
+
+    - name: Remove fluent-bit and osquery
+      ansible.builtin.apt:
+        name:
+          - fluent-bit
+          - osquery
+        state: absent
+
+    - name: Delete old data
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/fluent-bit
+        - /etc/osquery
+        - /etc/default/fluent-bit
+        - /etc/default/osqueryd
+        - /opt/osquery
+        - /var/osquery
+        - /var/log/osquery
+        - /var/lib/fluent-bit
+        - /opt/fluent-bit
+
     - name: Создать рабочие директории
       ansible.builtin.file:
         path: "{{ item }}"
@@ -43,6 +78,7 @@
         - /etc/audit/rules.d
         - /etc/fluent-bit/scripts
         - /etc/osquery
+        - /opt/osquery/share/osquery/packs
         - /var/log/osquery
         - /var/lib/fluent-bit/storage
         - /opt/fluent-bit
@@ -352,6 +388,16 @@
         - not btf_stat.stat.exists
       tags: [osquery, p2_01]
 
+    - name: Развернуть osquery custom_pack
+      ansible.builtin.copy:
+        src: ../configs/osquery/custom_pack.conf
+        dest: /opt/osquery/share/osquery/packs/custom_pack.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart osqueryd
+      tags: [osquery]
+
     - name: Render and deploy osquery config
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../configs/osquery/osquery.conf.j2"
@@ -360,6 +406,16 @@
         group: root
         mode: "0640"
         validate: 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" %s'
+      notify: restart osqueryd
+      tags: [osquery]
+
+    - name: Развернуть osquery defaults
+      ansible.builtin.copy:
+        src: ../configs/osquery/osqueryd
+        dest: /etc/default/osqueryd
+        owner: root
+        group: root
+        mode: "0644"
       notify: restart osqueryd
       tags: [osquery]
 

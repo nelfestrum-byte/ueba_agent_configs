@@ -42,17 +42,25 @@ local function get_docker_cid(pid)
     return nil
 end
 
--- Читает /proc/<pid>/ns/cgroup и возвращает inode как строку.
--- Формат symlink: "cgroup:[4026532177]" → "4026532177".
+-- Читает /proc/<pid>/cgroup (unified cgroup v2 путь после "0::"), затем stat
+-- инод самой cgroup-директории под /sys/fs/cgroup. BPF-таблицы (cols.cid)
+-- репортуют именно inode директории cgroupfs (bpf_get_current_cgroup_id),
+-- а не inode cgroup namespace из /proc/<pid>/ns/cgroup — эти два числа не совпадают.
 -- Используется при docker_containers/added для пополнения cgroup_ns_cache.
-local function get_cgroup_ns(pid)
+local function get_cgroup_dir_inode(pid)
     if not pid or pid == "" then return nil end
-    local p = io.popen("readlink /proc/" .. tostring(pid) .. "/ns/cgroup 2>/dev/null")
+    local f = io.open("/proc/" .. tostring(pid) .. "/cgroup", "r")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    local rel = content:match("^0::([^\n]*)")
+    if not rel or rel == "" then return nil end
+    local p = io.popen("stat -c %i /sys/fs/cgroup" .. rel .. " 2>/dev/null")
     if not p then return nil end
-    local link = p:read("*l")
+    local inode = p:read("*l")
     p:close()
-    if not link then return nil end
-    return link:match("cgroup:%[(%d+)%]")
+    if not inode or inode == "" then return nil end
+    return inode
 end
 
 -- Пытается определить Docker container ID для процесса pid.
@@ -812,7 +820,7 @@ function enrich_osquery(tag, timestamp, record)
             -- по osquery.cid (cgroup namespace inode), включая короткоживущие
             -- subprocess где /proc/<pid>/cgroup уже недоступен.
             if action == "added" and cols["pid"] and cols["pid"] ~= "" and cols["pid"] ~= "0" then
-                local cgns = get_cgroup_ns(cols["pid"])
+                local cgns = get_cgroup_dir_inode(cols["pid"])
                 if cgns then
                     if _cgns_size >= CGNS_CACHE_MAX then
                         cgroup_ns_cache = {}

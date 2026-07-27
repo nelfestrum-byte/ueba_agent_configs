@@ -113,7 +113,9 @@ ueba-stand/
 | **Lua merge** | `agents/configs/fluent-bit/scripts/auditd_merge.lua` | объединение auditd записей по serial |
 | **Lua enrich** | `agents/configs/fluent-bit/scripts/auditd_enrich.lua` | ECS-обогащение (MITRE ATT&CK теги отключены); pid→start_time кэш + `/proc/<pid>/stat` для `process.entity_id`; обработчики USER_*/CRED_*/SERVICE_START/SERVICE_STOP и реклассификация AF_UNIX/AF_NETLINK/AF_PACKET сокетов (QA-02) |
 | **Lua osquery enrich** | `agents/configs/fluent-bit/scripts/osquery_enrich.lua` | ECS-обогащение osquery diff-событий + osquery.* namespace; pid→start_time кэш; `process.entity_id` совпадает с auditd во всех источниках включая `bpf_process_events` (QA-FIX-12: epoch start_time из `/proc/<pid>/stat` вместо kernel monotonic ntime); QA-03: `cgroup_ns_cache` (osquery.cid → container.id) + AF_NETLINK/AF_UNIX → category=process + `normalize_int64` для BPF exit_code + `uid_to_name` для kernel_keys + `container_observed_*` action |
-| **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation |
+| **Конфиг osquery** | `agents/configs/osquery/osquery.conf.j2` | Jinja2-шаблон: diff-запросы + BPF backend per-group + profile server/workstation + `packs.custom_pack` → `agents/configs/osquery/custom_pack.conf` |
+| **osquery defaults** | `agents/configs/osquery/osqueryd` | `/etc/default/osqueryd`: пути к flag/config/pidfile |
+| **osquery custom_pack** | `agents/configs/osquery/custom_pack.conf` | Доп. пак диагностических/инвентаризационных запросов (syslog_events, docker_*, `_count`-снапшоты и т.д.) для целей, отличных от UEBA-скоринга (ручной threat hunting/инвентаризация). **Не проходит через `osquery_enrich.lua`** — события пишутся в `fluent-osquery-*` без ECS-нормализации и без `process.entity_id`. Не использовать как источник для UEBA-скоринга. |
 | **Деплой агентов** | `agents/deploy/agents-deploy.yml` | Ansible: auditd + fluent-bit + osquery |
 | **Переменные агентов** | `agents/deploy/group_vars/all.yml` | `logstash_security_host`, `logstash_common_host`, `base_stack`, версии .deb, osquery_profile |
 | **Client stack группы** | `agents/deploy/group_vars/freeipa_hosts.yml`, `keycloak_hosts.yml`, `docker_log_hosts.yml`, `spo_hosts.yml`, `ssz_hosts.yml` | Переопределяют `base_stack` для соответствующих групп хостов. Возможные значения: freeipa, keycloak, docker_events, suricata, waf, bird. forward-input (24224) и docker.* фильтры включаются только по `docker_events` |
@@ -221,6 +223,9 @@ curl -s http://127.0.0.1:2020/api/v1/metrics | python3 -m json.tool
 ```
 
 ## Известные особенности и грабли
+
+### agents-deploy.yml — полная переустановка fluent-bit/osquery при каждом прогоне
+Перед установкой пакетов плейбук **останавливает и удаляет** `fluent-bit`/`osquery` (`apt state=absent`) и чистит их данные/конфиги (`/etc/fluent-bit`, `/etc/osquery`, `/var/log/osquery`, `/opt/fluent-bit`, `/opt/osquery`, `/var/osquery`, `/var/lib/fluent-bit`, `/etc/default/fluent-bit`, `/etc/default/osqueryd`) — идемпотентности через version-check (`_debs_install_needed`) больше недостаточно для пропуска установки, т.к. пакеты гарантированно отсутствуют после purge. **Следствие**: каждый прогон `agents-deploy.yml` — это простой fluent-bit/osquery на время передеплоя, а не тихий inline-апдейт. `auditd` под это не подпадает (не останавливается/не удаляется).
 
 ### auditd 4.x — нет type=EOE в audit.log
 auditd **4.0+** не пишет `type=EOE` в `/var/log/audit/audit.log` — в 4.x EOE обрабатывается внутри dispatcher-плагинов и в лог не попадает. `end_of_event_timeout = 2` в `auditd.conf` **не исправляет** это поведение.

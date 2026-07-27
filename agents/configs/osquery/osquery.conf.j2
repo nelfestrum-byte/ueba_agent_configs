@@ -43,6 +43,10 @@
     "disable_distributed": "true"
   },
 
+  "packs": {
+    "custom_pack": "/opt/osquery/share/osquery/packs/custom_pack.conf"
+  },
+
   "schedule": {
 
     "listening_ports": {
@@ -141,7 +145,7 @@
     },
 
     "shell_history": {
-      "query": "SELECT sh.uid, u.username, sh.command, sh.history_file FROM shell_history sh LEFT JOIN users u ON sh.uid = u.uid;",
+      "query": "SELECT sh.uid, u.username, sh.command, sh.history_file FROM shell_history sh LEFT JOIN users u ON sh.uid = u.uid WHERE sh.uid IN (SELECT uid FROM users WHERE uid < 65534);",
       "interval": 300,
       "removed": false,
       "description": "User command history (bash/zsh) — UEBA sequence anomalies (P2-02)"
